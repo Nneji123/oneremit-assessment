@@ -9,28 +9,32 @@ supporting documentation. Everything below is implemented in `main`.
 
 | Requirement | Implementation | Tests | Docs |
 | --- | --- | --- | --- |
-| Fresh Git repository, clean history | git log (8 commits) | — | README "Incremental commit history" |
-| Docker Compose: PostgreSQL + Django + Next.js | `compose.yml` (db/backend/frontend, health-gated `db`) | `docker compose config --quiet` | README "Docker Compose"; docs/architecture.md |
-| Environment-based settings, real-secret guard | `backend/config/settings.py` (`ENVIRONMENT`, `REQUIRE_SECRETS`, placeholder rejection) | — | README "Assumptions", AGENTS.md |
+| Fresh Git repository, clean history | git log (17 commits) | — | README "Incremental commit history" |
+| Docker Compose: PostgreSQL + Django + Next.js | `compose.yml` (db/backend/backend-test/frontend, health-gated `db`) | `docker compose config --quiet` | README "Docker Compose"; docs/architecture.md |
+| Environment-based settings, real-secret guard | `backend/config/settings/` (`base.py` + `development.py`/`production.py` routed by `ENVIRONMENT`; `REQUIRE_SECRETS`, placeholder rejection) | — | README "Assumptions", AGENTS.md |
 | Health endpoint | `GET /health/` (`config/urls.py`) | — | README API summary |
 | Dependency manifests + lockfiles | `backend/pyproject.toml` + `uv.lock`; `frontend/package.json` + `package-lock.json` | — | README "What this is" |
 | CI quality gates | `.github/workflows/ci.yml` (backend, frontend, docker jobs) | CI runs lint/format/pytest, lint/typecheck/test/build, compose config + image builds | README "Everything at once"; docs/testing.md |
+| Shared core app (BaseModel, ResponseMixin, pagination) | `backend/apps/core/{models,mixins,pagination}.py` (`BaseModel`, `ResponseMixin`, `StandardResultsSetPagination`) | envelope shape asserted across API tests | docs/architecture.md "Code organization" |
+| Uniform response envelope | `core.mixins.ResponseMixin` + `core.pagination.StandardResultsSetPagination` (`{success, message, response_code, data[, pagination]}`) | API tests assert `success`/`message`/`data` shape | docs/api.md "Response envelope" |
+| Multi-stage Docker image + test target | `backend/Dockerfile` (`base` → `builder` → `runtime` → `test`); compose `backend-test` profile service | `docker compose --profile test run --rm backend-test` | README "Docker Compose"; docs/testing.md "Docker" |
 | No auth, no Celery, no Redis, no real provider | empty `authentication_classes`/`permission_classes` on the local API views; no worker deps | — | README "Assumptions", "What was deliberately left out" |
 
 ### Transfer domain
 
 | Requirement | Implementation | Tests | Docs |
 | --- | --- | --- | --- |
-| `Transfer` model + constraints | `backend/transfers/models.py`, migrations `0001`/`0002` | `test_state_machine.py` (uniqueness, validation, DB status check) | docs/architecture.md "Data model" |
-| State machine with terminal states | `backend/transfers/services.py` (`transition_transfer`, `select_for_update`, `InvalidTransferTransition`) | `test_state_machine.py` (53 tests incl. all transition pairs, stale-read race) | docs/architecture.md "State transition table" |
+| `Transfer` model + constraints | `backend/apps/transfers/models.py`, migrations `0001`/`0002` | `test_state_machine.py` (uniqueness, validation, DB status check) | docs/architecture.md "Data model" |
+| State machine with terminal states | `backend/apps/transfers/services.py` (`transition_transfer`, `select_for_update`, `InvalidTransferTransition`) | `test_state_machine.py` (53 tests incl. all transition pairs, stale-read race) | docs/architecture.md "State transition table" |
 | Concurrency hardening | `select_for_update` + persisted-status read + `transaction.atomic()` | `test_stale_concurrent_transition_cannot_apply_invalid_transition`, `test_transition_reads_persisted_status_not_stale_memory` | docs/architecture.md |
+| Domain layering (enums / exceptions / services) | `backend/apps/transfers/enums.py`, `exceptions.py`, `services.py` | — | docs/architecture.md "Code organization" |
 
 ### Transfer API
 
 | Requirement | Implementation | Tests | Docs |
 | --- | --- | --- | --- |
-| Create transfer | `TransferViewSet.create` (`views.py`) | `test_transfers_api.py` create tests | docs/api.md, README API summary |
-| Request idempotency (key + fingerprint) | `views.py` `create`, `_fingerprint`, unique `idempotency_key`, `request_fingerprint` | replay `200`/conflict `409`/key-length/JSON-order tests | README "Idempotency semantics"; docs/api.md |
+| Create transfer | `TransferViewSet.create` (`backend/apps/transfers/views.py`) | `test_transfers_api.py` create tests | docs/api.md, README API summary |
+| Request idempotency (key + fingerprint) | `services.py` `request_fingerprint` + `create_transfer`, unique `idempotency_key`, `request_fingerprint` | replay `200`/conflict `409`/key-length/JSON-order tests | README "Idempotency semantics"; docs/api.md |
 | List / retrieve | `ListModelMixin` / `RetrieveModelMixin` | list newest-first, detail, 404 tests | docs/api.md |
 | Submit (`pending → processing`, provider id) | `submit` action delegating to `transition_transfer`; `provider_transfer_id = prov_<hex>` | `test_submit_*`, `test_submit_delegates_transition_to_service` | docs/api.md |
 | Cancel (`pending → cancelled`) | `cancel` action → service | `test_cancel_*` incl. terminal rejections | docs/api.md |
@@ -40,7 +44,7 @@ supporting documentation. Everything below is implemented in `main`.
 
 | Requirement | Implementation | Tests | Docs |
 | --- | --- | --- | --- |
-| Signed webhook, HMAC over raw body | `ProviderWebhookView.post`, `_verify_provider_signature` (before parsing) | `test_provider_webhooks.py` signature tests; `test_signature_is_computed_from_raw_request_body` | README "Signed webhook curl example"; docs/api.md |
+| Signed webhook, HMAC over raw body | `services.py` `verify_provider_signature` + `ProviderWebhookView.post` (verify before parsing) | `test_provider_webhooks.py` signature tests; `test_signature_is_computed_from_raw_request_body` | README "Signed webhook curl example"; docs/api.md |
 | Event idempotency (event ids + payload fingerprint) | `ProviderEvent.event_id` unique; `payload_fingerprint`; duplicate/conflict handling | duplicate `200`, conflicting reuse `409` tests | README "Idempotency semantics"; docs/api.md |
 | Outcome recording | `ProviderEvent.outcome` (`applied` / `ignored_terminal`) | scenarios A/B/D assert outcomes | docs/architecture.md "Webhook handling rules" |
 | Scenarios A–E | — | named scenario tests (see docs/testing.md) | docs/testing.md "Named webhook scenarios A–E" |

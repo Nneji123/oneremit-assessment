@@ -16,8 +16,8 @@ uv run python manage.py spectacular --validate   # OpenAPI schema validation
 ```
 
 Note: the backend test suite does **not** require Docker or PostgreSQL — it runs
-against the SQLite fallback configured by `settings.py` in the `local` env.
-`testpaths = tests transfers/tests` (from `pytest.ini`).
+against the SQLite fallback configured by `config/settings/` in the `local`
+env. `testpaths = apps/transfers/tests` (from `pytest.ini`).
 
 ### Frontend (run from `frontend/`)
 
@@ -36,8 +36,11 @@ docker compose --profile test run --rm backend-test   # backend tests in the ded
 docker compose config --quiet                         # validate compose file
 ```
 
-The `backend-test` service builds the `test` Dockerfile target (includes dev
-dependencies) and runs the suite against the Compose PostgreSQL instance.
+The `backend-test` service builds the `test` Dockerfile target and runs the
+suite against the Compose PostgreSQL instance. The `test` target installs dev
+dependencies (`uv sync --frozen`), while the `runtime` target — which the
+regular `backend` service uses — installs runtime deps only and intentionally
+has no pytest.
 
 ### CI (GitHub Actions)
 
@@ -52,9 +55,9 @@ backend `uv sync --locked --dev` → `ruff check` → `ruff format --check` →
 
 | Module | Tests | Covers |
 | --- | --- | --- |
-| `transfers/tests/test_state_machine.py` | 53 | every allowed/forbidden transition, row-lock/stale-read concurrency, amount/currency validation, uniqueness constraints, DB-level status rejection |
-| `transfers/tests/test_transfers_api.py` | 25 | create + idempotency (replay, conflict, key length, JSON order), submit/cancel flows, 404/405/409 edge cases, submit delegates to the service |
-| `transfers/tests/test_provider_webhooks.py` | 15 | signature verification (missing/invalid/prefix), raw-body signing, duplicate/conflicting event ids, unknown provider id, pending rejection, terminal-wins behavior, malformed JSON/payload |
+| `apps/transfers/tests/test_state_machine.py` | 53 | every allowed/forbidden transition, row-lock/stale-read concurrency, amount/currency validation, uniqueness constraints, DB-level status rejection |
+| `apps/transfers/tests/test_transfers_api.py` | 25 | create + idempotency (replay, conflict, key length, JSON order), submit/cancel flows, 404/405/409 edge cases, submit delegates to the service |
+| `apps/transfers/tests/test_provider_webhooks.py` | 15 | signature verification (missing/invalid/prefix), raw-body signing, duplicate/conflicting event ids, unknown provider id, pending rejection, terminal-wins behavior, malformed JSON/payload |
 
 ## Frontend test matrix
 

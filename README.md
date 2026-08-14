@@ -30,15 +30,20 @@ Current test status: **93 backend tests, 6 frontend tests** — all passing.
 
 ```
 backend/                 Django + DRF API
-  config/                settings, URL routing
-  transfers/             models, state machine, views, serializers, tests
+  config/
+    settings/            base.py + development.py / production.py, routed by ENVIRONMENT
+    urls.py              URL routing
+  apps/
+    core/                BaseModel, ResponseMixin, envelope pagination
+    transfers/           enums.py, exceptions.py, models.py, services.py,
+                         serializers.py, views.py, urls.py, tests/
 frontend/                Next.js dashboard
   app/                   routes (dashboard list, transfer detail)
   components/            UI + component tests
   lib/                   API client, types, formatting
-docs/                    api.md, architecture.md, testing.md, assessment-checklist.md
+docs/                    api.md, architecture.md, testing.md, assessment-checklist.md, design-audit.md
 .github/workflows/ci.yml CI quality gates
-compose.yml              PostgreSQL + backend + frontend
+compose.yml              PostgreSQL + backend + backend-test + frontend
 Makefile                 dev shortcuts
 ```
 
@@ -53,8 +58,18 @@ docker compose up --build
 This starts:
 
 - `db` — PostgreSQL 16 (`postgres:16-alpine`), healthy-gated for the backend.
-- `backend` — runs `migrate` then serves gunicorn on `http://localhost:8000`.
+- `backend` — runs `migrate` then serves gunicorn on `http://localhost:8000`,
+  built from the multi-stage `backend/Dockerfile` `runtime` target (runtime deps
+  only, non-root user, healthcheck).
 - `frontend` — Next.js standalone build served on `http://localhost:3000`.
+
+The `backend-test` service (the `test` Dockerfile target, which adds dev
+dependencies) runs the backend suite and is gated behind the `test` profile, so
+`docker compose up` does not start it. Run it with:
+
+```bash
+docker compose --profile test run --rm backend-test
+```
 
 Compose supplies development-only defaults for `SECRET_KEY`,
 `PROVIDER_WEBHOOK_SECRET`, and `POSTGRES_PASSWORD` (`local-development-only`)
@@ -99,7 +114,7 @@ The API is then at `http://localhost:8000/api/...` and the health check at
 
 To run against PostgreSQL locally instead of SQLite, also export the
 `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`,
-`POSTGRES_PORT` variables documented in `backend/config/settings.py` (or set
+`POSTGRES_PORT` variables documented in `backend/config/settings/base.py` (or set
 `DATABASE_URL`).
 
 ### Frontend (direct local dev)
@@ -127,7 +142,9 @@ uv run python manage.py spectacular --validate   # OpenAPI schema validation
 
 `uv sync` (dev group) is required once before the above. The exact environment
 variables above are what the local backend commands and tests expect; the CI
-workflow runs the same suite via `uv sync --locked --dev`.
+workflow runs the same suite via `uv sync --locked --dev`. `pytest.ini` pins
+`DJANGO_SETTINGS_MODULE = config.settings` and `testpaths = apps/transfers/tests`
+(the three test files under `apps/transfers/tests/`).
 
 ### Frontend (run from `frontend/`)
 
@@ -333,8 +350,9 @@ stored — only a SHA-256 fingerprint plus the derived outcome
   provider/worker exists.
 - Add real auth (sessions or JWT) and per-tenant isolation, plus filtering on
   the list endpoint.
-- Break the single `views.py` into thin HTTP handlers plus a service layer, and
-  extract the provider-facing surface into its own app.
+- Split `views.py` into separate HTTP modules per resource (the service layer
+  and domain exceptions already live in their own `services.py`/`exceptions.py`
+  modules), and extract the provider-facing surface into its own app.
 - Add property-based tests for the state machine and load tests for the
   concurrency path against PostgreSQL.
 
@@ -378,11 +396,25 @@ e991e56 feat: add transfer api and request idempotency
 ec23b6d fix: harden transfer api edge cases
 c0d2580 feat: add signed idempotent provider webhooks
 efccd6a feat: add payout dashboard frontend
+77e4801 docs: complete assessment submission runbook
+35e15fd fix: tighten ci and repository hygiene
+c9ff3dc refactor: restructure backend with core app and split settings
+6505403 feat: adopt response envelope across the api
+44c2806 refactor: move transfer business logic into services
+b1d7fcf refactor: extract domain exceptions into dedicated module
+c0297df build: production-grade multi-stage backend image with compose test target
+ea2bc18 docs: add oneremit design audit and design system
+9cdbffe feat: restyle dashboard with oneremit design system
 ```
 
 Each feature lands with its own tests and docs (`docs/api.md` grew alongside
 the API); hardening commits tighten edge cases and concurrency rather than
-rearchitecting. See `git log` for the full history.
+rearchitecting. The later commits restructure the backend into a shared
+`core` app with split settings and the response envelope, extract business
+logic and domain exceptions into `services.py`/`exceptions.py`, add the
+multi-stage Docker image with a test target, and restyle the dashboard to the
+Oneremit design system (`docs/design-audit.md`). See `git log` for the full
+history.
 
 ## Total time spent
 

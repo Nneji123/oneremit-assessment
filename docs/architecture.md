@@ -3,10 +3,52 @@
 ## Overview
 
 A three-service Docker Compose monorepo: PostgreSQL, a Django REST API, and a
-Next.js dashboard. All business logic lives in one Django app (`transfers`).
-There is no Redis, no Celery, no background workers, and no real provider — the
-provider is simulated by signed webhooks delivered with `curl`, and the
-frontend polls while a transfer is `processing`.
+Next.js dashboard. All domain logic lives in one Django app (`transfers`),
+built on a small shared `core` app. There is no Redis, no Celery, no background
+workers, and no real provider — the provider is simulated by signed webhooks
+delivered with `curl`, and the frontend polls while a transfer is `processing`.
+
+## Code organization
+
+- **`backend/apps/core`** — shared building blocks reused across apps:
+  - `models.BaseModel` — abstract base with a UUID primary key plus
+    `created_at`/`updated_at` audit timestamps.
+  - `mixins.ResponseMixin` — wraps every view response in the standard envelope
+    `{success, message, response_code, data[, pagination]}`.
+  - `pagination.StandardResultsSetPagination` — default list pagination
+    (page size 20, `page_size` query param) that emits the same envelope.
+  - `enums.py` / `permissions.py` — placeholders for future shared enums and
+    permission building blocks (not yet wired into views).
+- **`backend/apps/transfers`** — the domain, layered so each module depends only
+  on the ones below it: `enums.py` → `models.py` → `services.py` →
+  `serializers.py` → `views.py` → `urls.py`.
+  - `enums.py` — `TransferStatus`, `TransferCurrency`,
+    `ProviderEventStatus`/`ProviderEventOutcome`.
+  - `models.py` — `Transfer` (extends `BaseModel`) and `ProviderEvent`.
+  - `services.py` — state machine, idempotency, webhook processing, and HMAC
+    signature verification.
+  - `exceptions.py` — domain exceptions (`InvalidTransferTransition`,
+    `IdempotencyConflict`, `TransferNotFound`, webhook conflict classes) that
+    give views and tests a stable failure contract.
+  - `serializers.py` / `views.py` — request/response shaping and the thin HTTP
+    handlers (`TransferViewSet`, `ProviderWebhookView`).
+- **`backend/config/settings/`** — split settings package: `base.py` holds the
+  env-driven configuration (secret guard, DB URL construction from
+  `DATABASE_URL` or `POSTGRES_*`, DRF/spectacular). `development.py` and
+  `production.py` build on it, and `__init__.py` routes to them from the
+  `ENVIRONMENT` variable (`production`/`prod`/`staging` → production, else
+  development).
+- **Response envelope** — every endpoint returns
+  `{success, message, response_code, data[, pagination]}` via `ResponseMixin`;
+  list endpoints keep the same shape through the custom pagination class.
+- **Multi-stage Docker image** — `backend/Dockerfile` builds `base` →
+  `builder` (runtime deps only) → `runtime` (lean production target: non-root
+  user, healthcheck, gunicorn) → `test` (full source + dev dependencies, runs
+  pytest). `compose.yml` uses `runtime` for the `backend` service and exposes
+  the `test` target as the `backend-test` service behind the `test` profile.
+- **Frontend design system** — the dashboard is styled with Albert Sans
+  (`next/font/google`) and Oneremit's design tokens audited from oneremit.co
+  (palette, radii, pills, status colors); see [docs/design-audit.md](design-audit.md).
 
 ## Container diagram
 
@@ -38,7 +80,8 @@ transfer is `processing` because there is no push channel.
 
 ## Data model
 
-Defined in `backend/transfers/models.py` (migrations `0001`–`0003`).
+Defined in `backend/apps/transfers/models.py` (migrations `0001`–`0003`);
+`Transfer` extends `core.models.BaseModel`.
 
 ### `Transfer`
 
@@ -75,9 +118,10 @@ Raw payloads and signatures are never stored — only fingerprints and outcomes.
 
 ## State transition table
 
-Enforced in `backend/transfers/services.py` (`transition_transfer`), which rows
-the transfer with `SELECT ... FOR UPDATE`, reads the *persisted* status, applies
-one allowed transition, and raises `InvalidTransferTransition` otherwise.
+Enforced in `backend/apps/transfers/services.py` (`transition_transfer`), which
+rows the transfer with `SELECT ... FOR UPDATE`, reads the *persisted* status,
+applies one allowed transition, and raises `InvalidTransferTransition`
+otherwise.
 
 | From | To | Trigger | Where handled |
 | --- | --- | --- | --- |
@@ -146,14 +190,17 @@ states. The dashboard list has a manual Refresh button.
 
 | Concern | File |
 | --- | --- |
-| Settings, secrets, DB URL | `backend/config/settings.py` |
-| Routing | `backend/config/urls.py`, `backend/transfers/urls.py` |
-| Models | `backend/transfers/models.py` |
-| State machine | `backend/transfers/services.py` |
-| HTTP views (API + webhook) | `backend/transfers/views.py` |
-| Serializers | `backend/transfers/serializers.py` |
+| Settings, secrets, DB URL | `backend/config/settings/base.py` (+ `development.py`/`production.py`, routed by `ENVIRONMENT`) |
+| Routing | `backend/config/urls.py`, `backend/apps/transfers/urls.py` |
+| Shared base model, envelope mixin, pagination | `backend/apps/core/{models,mixins,pagination}.py` |
+| Domain enums, exceptions | `backend/apps/transfers/{enums,exceptions}.py` |
+| Models | `backend/apps/transfers/models.py` |
+| State machine, idempotency, webhook logic | `backend/apps/transfers/services.py` |
+| HTTP views (API + webhook) | `backend/apps/transfers/views.py` |
+| Serializers | `backend/apps/transfers/serializers.py` |
 | Frontend API client | `frontend/lib/api.ts` |
 | Detail page + polling | `frontend/app/transfers/[id]/page.tsx` |
 | Dashboard | `frontend/app/page.tsx` |
+| Design tokens / styling | `frontend/app/globals.css`, `frontend/app/layout.tsx` |
 | Compose | `compose.yml` |
 | CI | `.github/workflows/ci.yml` |
