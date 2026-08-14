@@ -9,7 +9,7 @@
 export ENVIRONMENT=local DEBUG=1 SECRET_KEY=local-development-only PROVIDER_WEBHOOK_SECRET=local-development-only
 
 uv sync                                  # install incl. dev group
-uv run pytest                            # 93 tests
+uv run pytest                            # 101 tests
 uv run ruff check .                      # lint
 uv run ruff format --check .             # formatting
 uv run python manage.py spectacular --validate   # OpenAPI schema validation
@@ -25,7 +25,7 @@ env. `testpaths = apps/transfers/tests` (from `pytest.ini`).
 npm install
 npm run lint                             # ESLint
 npm run typecheck                        # tsc --noEmit
-npm test -- --run                        # Vitest, 6 tests (CI mode: single run)
+npm test -- --run                        # Vitest, 18 tests (CI mode: single run)
 npm run build                            # production build (typecheck + lint are separate)
 ```
 
@@ -51,23 +51,28 @@ backend `uv sync --locked --dev` → `ruff check` → `ruff format --check` →
 
 ## Backend test matrix
 
-**93 tests total**, split across three modules.
+**101 tests total**, split across four modules.
 
 | Module | Tests | Covers |
 | --- | --- | --- |
 | `apps/transfers/tests/test_state_machine.py` | 53 | every allowed/forbidden transition, row-lock/stale-read concurrency, amount/currency validation, uniqueness constraints, DB-level status rejection |
 | `apps/transfers/tests/test_transfers_api.py` | 25 | create + idempotency (replay, conflict, key length, JSON order), submit/cancel flows, 404/405/409 edge cases, submit delegates to the service |
 | `apps/transfers/tests/test_provider_webhooks.py` | 15 | signature verification (missing/invalid/prefix), raw-body signing, duplicate/conflicting event ids, unknown provider id, pending rejection, terminal-wins behavior, malformed JSON/payload |
+| `apps/transfers/tests/test_simulate_webhook.py` | 8 | simulate endpoint: completed/failed on `processing`, `409` for pending/terminal, `400` for invalid status, `404` for unknown id |
 
 ## Frontend test matrix
 
-**6 tests total**, three modules.
+**18 tests total**, seven modules.
 
 | Module | Tests | Covers |
 | --- | --- | --- |
 | `components/status-badge.test.tsx` | 1 | renders the right label for all five statuses |
 | `components/transfer-actions.test.tsx` | 3 | pending shows Submit + Cancel; processing and terminal statuses hide them |
 | `components/transfer-form.test.tsx` | 2 | surfaces API errors; submits payload and resets fields |
+| `components/transfer-simulate.test.tsx` | 4 | processing shows "Simulate completed"/"Simulate failed"; other statuses hide them; clicks call back with the right status |
+| `components/connection-status.test.tsx` | 3 | renders connected/reconnecting/offline labels |
+| `components/notifications.test.ts` | 1 | completed transfer uses the native browser `Notification` API |
+| `components/transfer-detail.test.tsx` | 4 | receipt branding/reference, total payout + metadata, timeline complete/current states |
 
 ## Named webhook scenarios A–E
 
@@ -90,12 +95,13 @@ status values (`400`).
 
 ## Verified status
 
-- Backend: `93 passed` with the documented env vars and no Docker dependency.
-- Frontend: `6 passed` with `npm test -- --run`.
+- Backend: `101 passed` with the documented env vars and no Docker dependency.
+- Frontend: `18 passed` with `npm test -- --run`.
 - Compose: `docker compose config --quiet` succeeds.
 
 Docker image builds and the full Compose runtime were locally verified in the
 final pass (`docker compose config --quiet` plus `docker compose up --build`,
-with the backend serving and the frontend reachable). Frontend tests run on
+with the backend serving under uvicorn — one worker, required by the in-memory
+channel layer — and the frontend reachable). Frontend tests run on
 the host (`npm test -- --run`) and in CI — they are not executed inside the
 production frontend container.

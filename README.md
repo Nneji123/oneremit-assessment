@@ -1,422 +1,178 @@
-# Oneremit Payout Dashboard — Assessment Submission
+# Oneremit PayOut Assessment
 
-## What this is
+A focused payout dashboard demonstrating explicit transfer states, idempotent
+requests, signed provider webhooks, local simulation, and realtime status
+updates.
 
-A payout dashboard monorepo for the Oneremit engineering assessment. A Next.js
-frontend talks to a Django REST API over a single `transfers` domain. Each
-transfer is created `pending`, `submit`ted into `processing` (where a provider
-id is assigned), and can only reach `completed` or `failed` via a **signed,
-idempotent provider webhook**; it can also be `cancelled` while `pending`. Every
-status change is enforced by one locked state machine service, never scattered
-across views.
-
-No real provider is called, no authentication is configured, and there is no
-queue or cache layer. The provider is simulated by sending signed webhooks with
-`curl`.
-
-**Stack**
-
-| Layer | Technology |
-| --- | --- |
-| Database | PostgreSQL 16 (SQLite fallback for direct local dev) |
-| Backend | Django 5.2, Django REST Framework, drf-spectacular (OpenAPI), gunicorn |
-| Frontend | Next.js 16 (App Router), React 19, TypeScript strict, Tailwind |
-| Tests | pytest + pytest-django (backend), Vitest + Testing Library (frontend) |
-| Orchestration | Docker Compose; GitHub Actions CI |
-
-Current test status: **93 backend tests, 6 frontend tests** — all passing.
-
-**Repository layout**
-
-```
-backend/                 Django + DRF API
-  config/
-    settings/            base.py + development.py / production.py, routed by ENVIRONMENT
-    urls.py              URL routing
-  apps/
-    core/                BaseModel, ResponseMixin, envelope pagination
-    transfers/           enums.py, exceptions.py, models.py, services.py,
-                         serializers.py, views.py, urls.py, tests/
-frontend/                Next.js dashboard
-  app/                   routes (dashboard list, transfer detail)
-  components/            UI + component tests
-  lib/                   API client, types, formatting
-docs/                    api.md, architecture.md, testing.md, assessment-checklist.md, design-audit.md
-.github/workflows/ci.yml CI quality gates
-compose.yml              PostgreSQL + backend + backend-test + frontend
-Makefile                 dev shortcuts
-```
-
-## How to run with Docker Compose
-
-Prerequisite: Docker with the Compose plugin.
+## Run
 
 ```bash
 docker compose up --build
 ```
 
-This starts:
+Open `http://localhost:3000`.
 
-- `db` — PostgreSQL 16 (`postgres:16-alpine`), healthy-gated for the backend.
-- `backend` — runs `migrate` then serves gunicorn on `http://localhost:8000`,
-  built from the multi-stage `backend/Dockerfile` `runtime` target (runtime deps
-  only, non-root user, healthcheck).
-- `frontend` — Next.js standalone build served on `http://localhost:3000`.
+Useful endpoints:
 
-The `backend-test` service (the `test` Dockerfile target, which adds dev
-dependencies) runs the backend suite and is gated behind the `test` profile, so
-`docker compose up` does not start it. Run it with:
+- API: `http://localhost:8000/api/`
+- Health: `http://localhost:8000/health/`
+- Swagger: `http://localhost:8000/api/docs/`
+- WebSocket: `ws://localhost:8000/ws/transfers/<id>/`
+
+Run backend tests in the dev/test image:
 
 ```bash
 docker compose --profile test run --rm backend-test
 ```
 
-Compose supplies development-only defaults for `SECRET_KEY`,
-`PROVIDER_WEBHOOK_SECRET`, and `POSTGRES_PASSWORD` (`local-development-only`)
-and points the frontend at `http://localhost:8000/api`. Override any of them
-with environment variables, e.g.:
+Stop everything with `docker compose down`.
 
-```bash
-PROVIDER_WEBHOOK_SECRET=<your-secret> docker compose up --build
+## Structure
+
+```text
+backend/config/settings/        base, development, production
+backend/apps/core/              BaseModel, response envelope, pagination
+backend/apps/transfers/         enums, exceptions, models, services, views
+frontend/app/                   dashboard and receipt/detail routes
+frontend/components/            UI, simulation, WebSocket, tests
+frontend/lib/                   REST, WebSocket, and notification helpers
+frontend/public/                Oneremit logo/favicon/illustration assets
+docs/                           API, architecture, testing, design audit, DoD
 ```
 
-Useful commands:
+Views are thin HTTP adapters. Business logic lives in
 
-```bash
-docker compose down                 # stop the stack
-docker compose logs -f              # follow logs
-docker compose config --quiet       # validate the compose file
-docker compose --profile test run --rm backend-test
-docker compose exec backend sh      # shell in backend container
+The backend runs Django Channels over ASGI with one uvicorn worker. The local
+in-memory channel layer is intentionally single-process. Production scaling
+would use Redis or another shared channel layer.
+
+## UI
+
+The frontend uses the Oneremit visual system audited in `docs/design-audit.md`:
+
+- Albert Sans.
+- Forest canvas `#032620` / `#043028`.
+- Mint accents `#beffc4` / `#92ff9d`.
+- Off-white 20px cards, map/globe artwork, status pills, and responsive layouts.
+- Native browser notifications when a transfer becomes completed.
+
+The dashboard has equal desktop columns for creation and transfer activity,
+stacking below `960px`. The transfer page renders as a receipt — Oneremit
+brandbar, prominent total payout and recipient, dashed metadata grid, and a
+three-step progress timeline — connects to a per-transfer WebSocket, shows
+connection state, and exposes local `Simulate completed` / `Simulate failed`
+controls while processing.
+
+## API
+
+Every JSON response uses:
+
+```json
+{
+  "success": true,
+  "message": "Transfer created",
+  "response_code": 201,
+  "data": {}
+}
 ```
 
-Useful Makefile shortcuts: `make up`, `make down`, `make logs`,
-`make backend-shell`, `make frontend-shell` wrap the Compose commands above.
-`make dev` instead runs the backend and frontend directly outside Docker and
-does **not** load any environment variables, so set the backend env vars from
-"Backend (direct local dev, SQLite fallback)" first.
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/transfers/` | Create pending transfer; requires `Idempotency-Key` |
+| `GET` | `/api/transfers/` | List transfers, paginated |
+| `GET` | `/api/transfers/{id}/` | Retrieve transfer |
+| `POST` | `/api/transfers/{id}/submit/` | Submit pending transfer |
+| `POST` | `/api/transfers/{id}/cancel/` | Cancel pending transfer |
+| `POST` | `/api/transfers/{id}/simulate-webhook/` | Local unsigned demo helper |
+| `POST` | `/api/webhooks/provider/` | Signed provider webhook |
 
-## How to run backend and frontend independently
+The simulation endpoint is local-only. The signed webhook remains the real
+provider path.
 
-### Backend (direct local dev, SQLite fallback)
+## Assessment Decisions
 
-```bash
-cd backend
-# Local-only values; production must provide real secrets.
-export ENVIRONMENT=local DEBUG=1 SECRET_KEY=local-development-only PROVIDER_WEBHOOK_SECRET=local-development-only
-uv sync
-uv run python manage.py migrate
-uv run python manage.py runserver
-```
+**Completed then failed:** terminal state wins. A later contradictory event is
+acknowledged with `200` and recorded as `ignored_terminal`, but cannot regress a
+completed transfer.
 
-The API is then at `http://localhost:8000/api/...` and the health check at
-`http://localhost:8000/health/`.
+**Unknown provider ID:** return `404` instead of soft-success. An unknown ID is
+a provider/configuration mismatch; acknowledging it would hide an operational
+error and prevent useful retries.
 
-To run against PostgreSQL locally instead of SQLite, also export the
-`POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`,
-`POSTGRES_PORT` variables documented in `backend/config/settings/base.py` (or set
-`DATABASE_URL`).
+**Signature verification:** the view reads raw request bytes and delegates HMAC
+verification to the transfer service before JSON parsing or database work.
+Common mistakes are signing re-serialized JSON, using ordinary equality instead
+of `compare_digest`, accepting malformed prefixes, logging secrets/payloads, or
+performing side effects before verification.
 
-### Frontend (direct local dev)
+**Open local API:** authentication is intentionally omitted for the assessment.
+Production would add authentication, authorization, rate limits, and tenant
+isolation.
 
-```bash
-cd frontend
-npm install
-NEXT_PUBLIC_API_BASE_URL=http://localhost:8000/api npm run dev
-```
-
-The dashboard is then at `http://localhost:3000`.
-
-## How to run all tests, lint, typecheck, schema validation, and builds
-
-### Backend (run from `backend/`)
-
-```bash
-export ENVIRONMENT=local DEBUG=1 SECRET_KEY=local-development-only PROVIDER_WEBHOOK_SECRET=local-development-only
-
-uv run pytest                       # 93 tests
-uv run ruff check .                 # lint
-uv run ruff format --check .        # formatting check
-uv run python manage.py spectacular --validate   # OpenAPI schema validation
-```
-
-`uv sync` (dev group) is required once before the above. The exact environment
-variables above are what the local backend commands and tests expect; the CI
-workflow runs the same suite via `uv sync --locked --dev`. `pytest.ini` pins
-`DJANGO_SETTINGS_MODULE = config.settings` and `testpaths = apps/transfers/tests`
-(the three test files under `apps/transfers/tests/`).
-
-### Frontend (run from `frontend/`)
-
-```bash
-npm install
-npm run lint                        # ESLint
-npm run typecheck                   # tsc --noEmit
-npm test -- --run                   # Vitest, 6 tests
-npm run build                       # production build
-```
-
-### Schema / configuration validation
-
-```bash
-docker compose config --quiet       # compose file validation (CI does the same)
-```
-
-### Everything at once (CI equivalent)
-
-`.github/workflows/ci.yml` runs the full set: backend
-`uv sync --locked --dev` → `ruff check` → `ruff format --check` → `pytest`;
-frontend `npm ci` → `lint` → `typecheck` → `npm test -- --run` → `npm run
-build`; and docker `docker compose config --quiet` → `docker compose build
-backend` → `docker compose build frontend`.
-
-## API endpoint summary
-
-Base URL: `http://localhost:8000/api`. All endpoints accept and return JSON;
-every response is wrapped in the envelope `{success, message, response_code,
-data[, pagination]}` and errors use `success: false` with a `message`.
-
-| Method | Path | Purpose | Success |
-| --- | --- | --- | --- |
-| `GET` | `/health/` | Liveness probe | `200` |
-| `POST` | `/transfers/` | Create a transfer (requires `Idempotency-Key`) | `201` / `200` replay |
-| `GET` | `/transfers/` | List transfers, newest first | `200` |
-| `GET` | `/transfers/{id}/` | Retrieve one transfer | `200` / `404` |
-| `POST` | `/transfers/{id}/submit/` | `pending` → `processing`, assign provider id | `200` / `404` / `409` |
-| `POST` | `/transfers/{id}/cancel/` | `pending` → `cancelled` | `200` / `404` / `409` |
-| `POST` | `/webhooks/provider/` | Provider outcome webhook (signed) | `200` / `400` / `401` / `404` / `409` |
-| `GET` | `/schema/` | OpenAPI schema (drf-spectacular) | `200` |
-| `GET` | `/docs/` | Swagger UI | `200` |
-
-`PATCH`, `PUT`, and `DELETE` on `/transfers/` are rejected with `405`.
-
-Full field-level documentation: [docs/api.md](docs/api.md).
-
-## Signed webhook curl example
-
-The provider webhook signs the **exact raw request body** with HMAC-SHA256
-using `PROVIDER_WEBHOOK_SECRET`. The header format is `X-Provider-Signature:
-sha256=<hex>`. The backend reads `request.body` raw bytes and verifies the
-signature *before* parsing JSON or touching the database. Re-serializing the
-body (for example via `jq`) breaks the signature.
-
-The example below uses the local-only placeholder secret from the documented
-test environment. Never commit a real secret.
+## Signed Webhook
 
 ```bash
 export PROVIDER_WEBHOOK_SECRET=local-development-only
-
-# 1. Create a transfer (any Idempotency-Key works for a one-off).
-curl -s -X POST http://localhost:8000/api/transfers/ \
-  -H "Content-Type: application/json" \
-  -H "Idempotency-Key: curl-demo-$(date +%s)" \
-  -d '{"amount":"100.00","currency":"NGN","recipient_ref":"recipient-123"}'
-
-# 2. Submit it; copy provider_transfer_id from the response.
-#    POST /api/transfers/<id>/submit/
-
-# 3. Sign the exact body with no trailing newline, then POST it.
-BODY='{"event_id":"evt_curl_001","provider_transfer_id":"<copy-from-step-2>","status":"completed","occurred_at":"2026-08-14T09:00:00Z"}'
-
+BODY='{"event_id":"evt_001","provider_transfer_id":"prov_abc","status":"completed","occurred_at":"2026-08-14T09:00:00Z"}'
 SIG=$(python3 - "$BODY" <<'PY'
-import hmac, hashlib, os, sys
-secret = os.environ["PROVIDER_WEBHOOK_SECRET"].encode("utf-8")
-digest = hmac.new(secret, sys.argv[1].encode("utf-8"), hashlib.sha256).hexdigest()
-print("sha256=" + digest)
+import hashlib, hmac, os, sys
+print("sha256=" + hmac.new(os.environ["PROVIDER_WEBHOOK_SECRET"].encode(), sys.argv[1].encode(), hashlib.sha256).hexdigest())
 PY
 )
-
-curl -i -X POST http://localhost:8000/api/webhooks/provider/ \
+curl -X POST http://localhost:8000/api/webhooks/provider/ \
   -H "Content-Type: application/json" \
   -H "X-Provider-Signature: $SIG" \
   --data-binary "$BODY"
 ```
 
-`printf`/`python3` (no added newline) + `curl --data-binary` guarantee the
-signed bytes are exactly the bytes the server verifies. The signing secret is
-configured server-side only — it never appears in browser code.
+## Verification
 
-## Assumptions
+Backend:
 
-- **Open local API / no authentication.** The API is intentionally unauthenticated
-  (`authentication_classes = []`) for this assessment. Production would front the
-  API with session/JWT auth and per-customer authorization.
-- **No real provider.** Submission only assigns a synthetic `prov_<hex>` id; the
-  provider is simulated by signed webhooks. Real provider APIs, retries, and
-  settlement reconciliation are out of scope.
-- **No queue or cache.** There is no Redis/Celery. The frontend detail page
-  polls every 2 s while a transfer is `processing`, which is how terminal
-  states appear in the UI.
-- **Single writer assumption.** Concurrent writes to one transfer are serialized
-  by `SELECT ... FOR UPDATE` in the transition service; this is correct under
-  this workload and the tests cover the stale-read race.
-- **Client-supplied `Idempotency-Key`.** Create idempotency relies on the caller
-  sending a stable key per logical request, like the frontend does with
-  `crypto.randomUUID()`.
-
-## Architecture sketch
-
-```
-┌─────────────┐   REST (JSON)   ┌──────────────────────────────────────┐
-│   Next.js   │ ──────────────▶ │  Django + DRF  (gunicorn, :8000)    │
-│ dashboard   │ ◀────────────── │  transfers app                       │
-│  (:3000)    │  poll 2s while  │    viewset → transition_transfer()   │
-└─────────────┘  processing     │    webhook  → verify HMAC → record   │
-                                └──────────────┬───────────┬───────────┘
-                                               │           │
-                        PostgreSQL 16 (:5432)   ▼           ▼
-                        Transfer, ProviderEvent        Provider (simulated)
-                                                      signed webhook via curl
-
-Events:
-  POST /api/transfers/          -> create (pending)
-  POST /api/transfers/{id}/submit/ -> pending -> processing + provider id
-  POST /api/transfers/{id}/cancel/ -> pending -> cancelled
-  POST /api/webhooks/provider/  -> processing -> completed | failed
-  Frontend polls detail page    -> picks up terminal states
+```bash
+cd backend
+export ENVIRONMENT=local DEBUG=1 SECRET_KEY=test-secret PROVIDER_WEBHOOK_SECRET=test-secret
+uv sync
+uv run pytest
+uv run ruff check .
+uv run ruff format --check .
+uv run python manage.py check
+uv run python manage.py spectacular --validate
 ```
 
-See [docs/architecture.md](docs/architecture.md) for the container diagram,
-data model, state transition table, and request flows.
+Frontend:
 
-## Decision log
-
-**Why the terminal state wins when completed is followed by failed.** Two
-different provider events for the same transfer arrive out of order: a
-`completed` and then a `failed`. Reverting a transfer from `completed` to
-`failed` would silently destroy money-movement record keeping. The state
-machine makes `completed`, `failed`, and `cancelled` terminal, so the later
-event is acknowledged (`200`) but recorded with outcome `ignored_terminal`
-instead of changing state. This is the standard "first terminal write wins"
-model for settlement systems: the webhook always gets a success so the provider
-stops retrying, but the recorded source of truth never regresses.
-
-**Why an unknown `provider_transfer_id` returns 404 instead of soft-success.**
-A signed event for a transfer id we have never issued is either a provider bug,
-a wrong-secret/attacker replay attempt, or a coding error on our side. Swallowing
-it with a `200` would hide the mismatch and make operational debugging much
-harder. Returning `404` fails loudly, records nothing, and matches the API's uniform
-response envelope (errors carry `success: false` with a `message`). It is
-distinct from the `409` returned
-when the transfer *is* known but not yet `processing`.
-
-**Where signature verification belongs in a real Django codebase, and common
-mistakes.** Verification must run before the body is parsed, deserialized, or
-used for any write, and must hash the raw bytes (`request.body`) — not a
-re-serialized dict. In a real codebase this is best placed in dedicated
-middleware or a base `APIView`/decorator applied to webhook routes only, kept
-out of generic view code. Common mistakes: hashing re-marshalled JSON (which
-can differ from the wire bytes), accepting non-`sha256=` scheme prefixes,
-comparing digests with `==` instead of `hmac.compare_digest`, letting signature
-failures fall through to generic `400` instead of `401`, and logging or storing
-the raw signed payload or secret.
-
-## Idempotency semantics
-
-**Create requests (`POST /transfers/`).** The caller sends an `Idempotency-Key`
-header (required, ≤ 255 chars). The backend stores a canonical fingerprint of
-the normalized request body (amount to two decimals, uppercase currency,
-recipient reference — independent of JSON key order/formatting) alongside the
-key. On replay of the same key with an identical fingerprint it returns the
-original transfer with `200`; with a different fingerprint it returns `409`
-and writes nothing. The unique constraint on `idempotency_key` makes this race-safe
-under `transaction.atomic()`.
-
-**Provider event IDs.** `event_id` is unique per event. Replaying the same
-`event_id` with an identical payload returns `200` and records nothing new.
-Reusing an `event_id` with a different payload returns `409` (protecting against
-two distinct events colliding on one id). Raw payloads and signatures are never
-stored — only a SHA-256 fingerprint plus the derived outcome
-(`applied`/`ignored_terminal`).
-
-## What was deliberately left out
-
-- Authentication, authorization, and any API keys — the local API is open.
-- A real provider integration (or even a mock provider server).
-- Redis, Celery, background jobs, and webhooks — no async worker layer exists.
-- Email/SMS notifications and per-transfer audit display in the UI.
-- Admin UI (`django.contrib.admin` is not installed).
-- Database migrations for non-`transfers` apps; SQLite is only a dev fallback.
-- Pagination on the transfers list is on by default (20 per page).
-- Filtering on the transfers list (fine at assessment scale).
-
-## What would be done differently with more time
-
-- Run webhook signature verification in shared middleware for webhook routes and
-  add unit tests at that layer.
-- Add a replay/outbox table for failed or out-of-order provider events and a
-  reconciliation job instead of only recording `ignored_terminal`.
-- Replace frontend polling with server-sent events or WebSockets once a real
-  provider/worker exists.
-- Add real auth (sessions or JWT) and per-tenant isolation, plus filtering on
-  the list endpoint.
-- Split `views.py` into separate HTTP modules per resource (the service layer
-  and domain exceptions already live in their own `services.py`/`exceptions.py`
-  modules), and extract the provider-facing surface into its own app.
-- Add property-based tests for the state machine and load tests for the
-  concurrency path against PostgreSQL.
-
-## Known limitations and risks
-
-- **`select_for_update` needs PostgreSQL.** The transition service relies on row
-  locks. Under the SQLite dev fallback the concurrency guarantees are weaker,
-  though the stale-read behavior is still covered by tests.
-- **No retry/outbox.** If the backend is down when a provider event arrives, the
-  event is lost (unless the provider retries); there is no durable outbox.
-- **In-flight state on crash.** A transfer left `processing` with no terminal
-  event would stay `processing` forever; there is no timeout/reconciliation
-  sweep.
-- **Webhook replay vs. transfer replay are independent** — correctly so, but
-  worth restating: re-sending a webhook for an already-completed transfer is
-  acknowledged as `ignored_terminal`, which is a deliberate, safe no-op.
-- **No auth** means anyone who can reach the API can create, submit, or cancel
-  transfers. Acceptable for the assessment; a hard blocker for real use.
-
-## Intentional bug caught during implementation
-
-The initial API implementation duplicated the `pending → processing` policy
-inline inside the `submit` view (`views.py`) instead of delegating to the single
-state-machine service. The test `test_submit_delegates_transition_to_service`
-exposed the drift risk — it asserts `submit` calls `transition_transfer`
-exactly once and surfaces `InvalidTransferTransition` as `409`. Commit
-`ec23b6d` moved `submit` onto the single locked transition service so the policy
-lives in exactly one place. **This was fixed before final submission** and is
-covered by the backend suite.
-
-## Incremental commit history
-
-The work was built incrementally in the recorded order:
-
-```
-fc9b8c7 chore: scaffold clean assessment monorepo
-60fcd3c fix: harden foundation containers and configuration
-c4c95c5 feat: add transfer state machine
-02ad31d fix: harden transfer transition concurrency
-e991e56 feat: add transfer api and request idempotency
-ec23b6d fix: harden transfer api edge cases
-c0d2580 feat: add signed idempotent provider webhooks
-efccd6a feat: add payout dashboard frontend
-77e4801 docs: complete assessment submission runbook
-35e15fd fix: tighten ci and repository hygiene
-c9ff3dc refactor: restructure backend with core app and split settings
-6505403 feat: adopt response envelope across the api
-44c2806 refactor: move transfer business logic into services
-b1d7fcf refactor: extract domain exceptions into dedicated module
-c0297df build: production-grade multi-stage backend image with compose test target
-ea2bc18 docs: add oneremit design audit and design system
-9cdbffe feat: restyle dashboard with oneremit design system
+```bash
+cd frontend
+npm ci
+npm test -- --run
+npm run lint
+npm run typecheck
+npm run build
 ```
 
-Each feature lands with its own tests and docs (`docs/api.md` grew alongside
-the API); hardening commits tighten edge cases and concurrency rather than
-rearchitecting. The later commits restructure the backend into a shared
-`core` app with split settings and the response envelope, extract business
-logic and domain exceptions into `services.py`/`exceptions.py`, add the
-multi-stage Docker image with a test target, and restyle the dashboard to the
-Oneremit design system (`docs/design-audit.md`). See `git log` for the full
-history.
+Current suite: 101 backend tests and 18 frontend tests.
 
-## Total time spent
+## Scope
 
-If not already recorded, the total time spent should be noted before
-submission. It is intentionally not invented here.
+Excluded intentionally: real provider integrations, auth, wallets, FX, KYC,
+ledgers, Celery, Redis, admin dashboards, cloud deployment, and horizontal
+WebSocket scaling.
+
+The runtime image is production-oriented: multi-stage build, runtime-only
+dependencies, non-root user, healthcheck, and ASGI server. The separate test
+target contains development dependencies.
+
+## Intentional Bug
+
+The first API version duplicated the `pending` to `processing` rule in the view.
+`test_submit_delegates_transition_to_service` caught the drift risk, and commit
+`ec23b6d` moved the action behind the locked state-machine service.
+
+## Docs
+
+- `docs/api.md`: REST, simulation, signed webhook, and WebSocket contracts.
+- `docs/architecture.md`: backend layers, state machine, and realtime flow.
+- `docs/design-audit.md`: audited Oneremit tokens and responsive rules.
+- `docs/testing.md`: test matrix and scenarios A–E.
+- `docs/assessment-checklist.md`: requirement mapping and DoD.

@@ -109,6 +109,34 @@ Moves a `pending` transfer to `cancelled`.
 | `404` | Transfer not found (including a malformed UUID identifier). |
 | `409` | Invalid state; the transfer is not `pending` and cannot be cancelled. |
 
+## Simulate a provider event (local demo helper)
+
+`POST /api/transfers/{id}/simulate-webhook/`
+
+Drives a `processing` transfer to `completed` or `failed` from the detail UI.
+This is a **local demo helper only**: it synthesizes an `event_id` and funnels
+the payload through the same `process_provider_event` service as the signed
+webhook, so the state machine and event-dedup semantics are identical. It is
+**not** a replacement for the signed production webhook, and it refuses any
+transfer that is not currently `processing`.
+
+Request fields:
+
+| Field | Type | Required | Rules |
+| --- | --- | --- | --- |
+| `status` | string | yes | One of `completed`, `failed`. |
+
+No signature header is required.
+
+Responses:
+
+| Status | Meaning |
+| --- | --- |
+| `200` | Simulated event applied; body contains the updated transfer. |
+| `400` | Missing or invalid `status` (anything other than `completed`/`failed`). |
+| `404` | Transfer not found (including a malformed UUID identifier). |
+| `409` | Transfer is not `processing` (e.g. still `pending`, or already terminal); nothing is recorded. |
+
 ## Status transitions
 
 Transitions are enforced by a single state machine:
@@ -163,3 +191,55 @@ Semantics:
 - Replaying the same `event_id` with an identical payload returns `200` and
   records nothing new.
 - Reusing an `event_id` with a different payload returns `409`.
+
+# Realtime updates (WebSocket)
+
+`ws://<host>/ws/transfers/{id}/`
+
+The detail page subscribes to a per-transfer WebSocket to receive status
+changes as they happen, instead of polling. The socket is intentionally
+unauthenticated — the assessment API is local/open.
+
+Connection flow:
+
+1. Client opens `ws://<host>/ws/transfers/{id}/` for a transfer UUID.
+2. The consumer accepts, joins the `transfer_<id>` group, and immediately sends
+   an initial snapshot of the transfer.
+3. On every committed status change (submit, cancel, signed webhook, or
+   simulate) the backend broadcasts to the group.
+
+Message contract (JSON):
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `type` | string | Always `transfer.status`. |
+| `transfer` | object | The full transfer object (same shape as the REST detail response). |
+
+Example:
+
+```json
+{
+  "type": "transfer.status",
+  "transfer": {
+    "id": "0f1a2b3c-…",
+    "reference": "TRF-abc123",
+    "status": "completed",
+    "amount": "100.00",
+    "currency": "NGN",
+    "recipient_ref": "recipient-123",
+    "provider_transfer_id": "prov_…",
+    "created_at": "2026-08-10T12:00:00Z",
+    "updated_at": "2026-08-10T12:01:00Z"
+  }
+}
+```
+
+Notes:
+
+- The channel layer is **in-memory** for this local assessment, so WebSockets
+  only work against a single process (exactly one uvicorn worker).
+- Broadcasts happen only *after* the status-changing transaction commits, so a
+  client never observes an uncommitted state.
+- The frontend opens this URL with
+  `NEXT_PUBLIC_WS_BASE_URL ?? derived from NEXT_PUBLIC_API_BASE_URL`, e.g.
+  `ws://localhost:8000/ws/transfers/<id>/`.

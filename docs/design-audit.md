@@ -89,8 +89,11 @@ Soft pill backgrounds with strong text (always include the text label):
 - **Mint pills with glow**: `#beffc4 → #92ff9d` gradient pills with the
   `rgba(5,187,108,0.12)` glow.
 - **Off-white cards** floating on the dark canvas.
-- **Sticky blurred header**: translucent `rgba(4,48,40,…)` + backdrop blur,
-  brand mark = mint gradient rounded square with a bold "O".
+- **Navigation reference**: the source site uses a sticky blurred header with a
+  full wordmark, segmented Business/Personal/Student switcher, and CTA buttons.
+  The assessment dashboard intentionally removes that navigation to keep the
+  workflow focused, while retaining the source site's canvas, type, card, pill,
+  and image treatment.
 
 ## Responsive
 

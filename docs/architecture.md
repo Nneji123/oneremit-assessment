@@ -4,9 +4,12 @@
 
 A three-service Docker Compose monorepo: PostgreSQL, a Django REST API, and a
 Next.js dashboard. All domain logic lives in one Django app (`transfers`),
-built on a small shared `core` app. There is no Redis, no Celery, no background
-workers, and no real provider — the provider is simulated by signed webhooks
-delivered with `curl`, and the frontend polls while a transfer is `processing`.
+built on a small shared `core` app. There is no Redis, no Celery, and no real
+provider — the provider is simulated by signed webhooks delivered with `curl`
+(the production path) or by a local unsigned simulate endpoint from the detail
+UI. Status changes are pushed to the frontend over a per-transfer WebSocket
+(Django Channels with an in-memory channel layer), so the detail page updates
+in real time instead of polling.
 
 ## Code organization
 
@@ -32,9 +35,20 @@ delivered with `curl`, and the frontend polls while a transfer is `processing`.
     give views and tests a stable failure contract.
   - `serializers.py` / `views.py` — request/response shaping and the thin HTTP
     handlers (`TransferViewSet`, `ProviderWebhookView`).
+  - `realtime.py` — `broadcast_transfer_status(transfer_id)`, the synchronous
+    entry point the service layer calls *after* a status-changing transaction
+    commits; it serializes the transfer and `group_send`s it to
+    `transfer_<id>`.
+  - `consumers.py` — `TransferStatusConsumer` (`AsyncJsonWebsocketConsumer`):
+    joins `transfer_<id>`, accepts, sends an initial snapshot, relays
+    `transfer.status` group events, and leaves the group on disconnect.
+- **`backend/config/routing.py`** — `websocket_urlpatterns` mapping
+  `ws/transfers/<uuid:transfer_id>/` to the consumer; mounted by the Channels
+  `ProtocolTypeRouter` in `config/asgi.py` (Django HTTP + WebSocket).
 - **`backend/config/settings/`** — split settings package: `base.py` holds the
   env-driven configuration (secret guard, DB URL construction from
-  `DATABASE_URL` or `POSTGRES_*`, DRF/spectacular). `development.py` and
+  `DATABASE_URL` or `POSTGRES_*`, DRF/spectacular, `ASGI_APPLICATION` and the
+  **in-memory** `CHANNEL_LAYERS`). `development.py` and
   `production.py` build on it, and `__init__.py` routes to them from the
   `ENVIRONMENT` variable (`production`/`prod`/`staging` → production, else
   development).
@@ -43,9 +57,14 @@ delivered with `curl`, and the frontend polls while a transfer is `processing`.
   list endpoints keep the same shape through the custom pagination class.
 - **Multi-stage Docker image** — `backend/Dockerfile` builds `base` →
   `builder` (runtime deps only) → `runtime` (lean production target: non-root
-  user, healthcheck, gunicorn) → `test` (full source + dev dependencies, runs
-  pytest). `compose.yml` uses `runtime` for the `backend` service and exposes
-  the `test` target as the `backend-test` service behind the `test` profile.
+  user, healthcheck, `uvicorn` with one worker) → `test` (full source + dev
+  dependencies, runs pytest). `compose.yml` uses `runtime` for the `backend`
+  service and exposes the `test` target as the `backend-test` service behind
+  the `test` profile.
+- **Realtime transport** — the backend runs under **uvicorn with exactly one
+  worker** because the channel layer is in-memory (`InMemoryChannelLayer`),
+  which has no cross-process transport. This is intentional for the local
+  assessment; production would swap in a Redis channel layer and scale workers.
 - **Frontend design system** — the dashboard is styled with Albert Sans
   (`next/font/google`) and Oneremit's design tokens audited from oneremit.co
   (palette, radii, pills, status colors); see [docs/design-audit.md](design-audit.md).
@@ -59,7 +78,7 @@ flowchart LR
     end
 
     subgraph "Docker Compose"
-        API[Django + DRF backend :8000]
+        API[Django + DRF + Channels :8000 uvicorn x1]
         DB[(PostgreSQL 16 :5432)]
     end
 
@@ -67,16 +86,18 @@ flowchart LR
         CURL[curl: signed provider webhook]
     end
 
-    UI -->|REST JSON, create/list/detail/submit/cancel| API
-    UI -.->|poll every 2s while processing| API
+    UI -->|REST JSON, create/list/detail/submit/cancel/simulate| API
+    UI <-->|WS /ws/transfers/{id}/ transfer.status| API
     CURL -->|POST /api/webhooks/provider/ HMAC-signed| API
     API --> DB
 ```
 
-Text equivalent: browser → Next.js (`:3000`) → Django/DRF (`:8000`) →
-PostgreSQL 16 (`:5432`); a signed webhook (simulated with `curl`) → DRF webhook
-view → PostgreSQL. The frontend polls the detail endpoint every 2 s while a
-transfer is `processing` because there is no push channel.
+Text equivalent: browser → Next.js (`:3000`) → Django/DRF/Channels (`:8000`,
+uvicorn × 1) → PostgreSQL 16 (`:5432`); a signed webhook (simulated with
+`curl`) → DRF webhook view → PostgreSQL. The frontend opens a per-transfer
+WebSocket to the backend and receives `transfer.status` pushes whenever a
+transfer changes state. The single uvicorn worker keeps the in-memory channel
+layer coherent.
 
 ## Data model
 
@@ -127,8 +148,8 @@ otherwise.
 | --- | --- | --- | --- |
 | `pending` | `processing` | `POST /transfers/{id}/submit/` | `submit` view → service; assigns `provider_transfer_id` |
 | `pending` | `cancelled` | `POST /transfers/{id}/cancel/` | `cancel` view → service |
-| `processing` | `completed` | `POST /webhooks/provider/` | webhook view → service, outcome `applied` |
-| `processing` | `failed` | `POST /webhooks/provider/` | webhook view → service, outcome `applied` |
+| `processing` | `completed` | `POST /webhooks/provider/` or `POST /transfers/{id}/simulate-webhook/` | webhook/simulate view → service, outcome `applied` |
+| `processing` | `failed` | `POST /webhooks/provider/` or `POST /transfers/{id}/simulate-webhook/` | webhook/simulate view → service, outcome `applied` |
 
 `completed`, `failed`, and `cancelled` are **terminal**; no transition out of
 them is allowed. Any other transition attempt returns `409` (or raises
@@ -180,26 +201,62 @@ any parsing or writes.
    `provider_transfer_id`, apply the transition or record `ignored_terminal`,
    and insert the `ProviderEvent`.
 
-### Frontend polling
+### Simulate provider event (local demo helper)
 
-`app/transfers/[id]/page.tsx` fetches the transfer and, while `status ===
-"processing"`, re-fetches every 2 s (`setInterval`), stopping at terminal
-states. The dashboard list has a manual Refresh button.
+1. `POST /api/transfers/{id}/simulate-webhook/` with `{"status": "completed"}` or
+   `{"status": "failed"}`. No signature required.
+2. Validate via `SimulateProviderEventSerializer` → `400` if invalid.
+3. Unknown or malformed UUID → `404`.
+4. `simulate_provider_event` refuses anything not `processing` → `409`.
+5. It synthesizes `event_id = sim_<hex>` and calls the same
+   `process_provider_event` service as the signed webhook, so state machine and
+   event-dedup semantics are identical.
+6. After the transaction commits, the service broadcasts `transfer.status`.
+
+### Realtime broadcast
+
+1. `broadcast_transfer_status(transfer_id)` (in `realtime.py`) is called from
+   the service layer **after** a status-changing transaction commits — from
+   `submit`, `cancel`, the signed webhook (`process_provider_event` on an
+   `applied` outcome), and simulation.
+2. It serializes the fresh transfer and `async_to_sync(group_send)`s
+   `{type: "transfer.status", transfer: {...}}` to the `transfer_<id>` group.
+3. `TransferStatusConsumer.transfer_status` relays it to the connected browser,
+   which updates its local `transfer` state immediately.
+4. Broadcasts never run before a transaction commits, so clients never observe
+   an uncommitted state.
+
+### Frontend realtime updates
+
+`app/transfers/[id]/page.tsx` renders the transfer as a receipt
+(`components/transfer-detail.tsx`: Oneremit brandbar, prominent total payout and
+recipient, dashed metadata grid, and a three-step progress timeline) and opens a
+WebSocket to `<ws base>/ws/transfers/{id}/` (`NEXT_PUBLIC_WS_BASE_URL`, else
+derived from `NEXT_PUBLIC_API_BASE_URL`), shows a small
+connected/reconnecting/offline indicator, and applies every `transfer.status`
+message to state. The manual Refresh button remains for a full re-fetch. A
+`processing` transfer also shows "Simulate completed" / "Simulate failed"
+buttons wired to the simulate endpoint; after the API call the UI relies on the
+WebSocket push and only falls back to the HTTP response when the socket is
+offline.
 
 ## Key implementation files
 
 | Concern | File |
 | --- | --- |
-| Settings, secrets, DB URL | `backend/config/settings/base.py` (+ `development.py`/`production.py`, routed by `ENVIRONMENT`) |
-| Routing | `backend/config/urls.py`, `backend/apps/transfers/urls.py` |
+| Settings, secrets, DB URL, channel layer | `backend/config/settings/base.py` (+ `development.py`/`production.py`, routed by `ENVIRONMENT`) |
+| Routing | `backend/config/urls.py`, `backend/config/routing.py`, `backend/apps/transfers/urls.py` |
+| ASGI entrypoint (HTTP + WebSocket) | `backend/config/asgi.py` |
 | Shared base model, envelope mixin, pagination | `backend/apps/core/{models,mixins,pagination}.py` |
 | Domain enums, exceptions | `backend/apps/transfers/{enums,exceptions}.py` |
 | Models | `backend/apps/transfers/models.py` |
-| State machine, idempotency, webhook logic | `backend/apps/transfers/services.py` |
+| State machine, idempotency, webhook + simulate logic | `backend/apps/transfers/services.py` |
+| Realtime broadcast | `backend/apps/transfers/realtime.py` |
+| WebSocket consumer | `backend/apps/transfers/consumers.py` |
 | HTTP views (API + webhook) | `backend/apps/transfers/views.py` |
 | Serializers | `backend/apps/transfers/serializers.py` |
-| Frontend API client | `frontend/lib/api.ts` |
-| Detail page + polling | `frontend/app/transfers/[id]/page.tsx` |
+| Frontend API client + WS URL | `frontend/lib/api.ts` |
+| Detail page + WebSocket updates | `frontend/app/transfers/[id]/page.tsx` |
 | Dashboard | `frontend/app/page.tsx` |
 | Design tokens / styling | `frontend/app/globals.css`, `frontend/app/layout.tsx` |
 | Compose | `compose.yml` |
