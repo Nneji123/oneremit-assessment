@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# uv
+backend/.venv/
+backend/db.sqlite3
+backend/staticfiles/
+
+# Node
+node_modules/
+frontend/.next/
+frontend/out/
+frontend/next-env.d.ts
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.override.yml
+
+# Coverage
+htmlcov/
+.coverage
+coverage.xml
+*.cover
+
+# Testing
+.pytest_cache/
+
+# Misc
+*.log
+*.tsbuildinfo
+
+# Local agent scratch
+.foundation-*
