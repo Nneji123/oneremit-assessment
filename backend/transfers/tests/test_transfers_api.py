@@ -1,10 +1,12 @@
 from decimal import Decimal
+from unittest import mock
 
 import pytest
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from transfers.models import Transfer
+from transfers.models import Transfer, TransferStatus
+from transfers.services import InvalidTransferTransition
 
 TRANSFER_URL = "/api/transfers/"
 
@@ -98,6 +100,15 @@ def test_same_semantic_body_replays_even_if_json_key_order_differs(api_client):
     assert first.status_code == status.HTTP_201_CREATED
     assert replay.status_code == status.HTTP_200_OK
     assert replay.data["id"] == first.data["id"]
+
+
+@pytest.mark.django_db
+def test_idempotency_key_longer_than_model_max_returns_400(api_client):
+    response = create_transfer(api_client, key="k" * 256)
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "detail" in response.data
+    assert Transfer.objects.count() == 0
 
 
 @pytest.mark.django_db
@@ -242,6 +253,35 @@ def test_unknown_transfer_action_returns_404(api_client, action_name):
     )
 
     assert response.status_code == status.HTTP_404_NOT_FOUND
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("action_name", ["submit", "cancel"])
+def test_malformed_transfer_uuid_action_returns_404(api_client, action_name):
+    response = api_client.post(
+        f"{TRANSFER_URL}not-a-valid-uuid/{action_name}/",
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert "detail" in response.data
+
+
+@mock.patch("transfers.views.transition_transfer")
+@pytest.mark.django_db
+def test_submit_delegates_transition_to_service(mock_transition, api_client):
+    created = create_transfer(api_client)
+    mock_transition.side_effect = InvalidTransferTransition(
+        "Cannot transition from 'pending' to 'processing'."
+    )
+
+    response = api_client.post(
+        f"{TRANSFER_URL}{created.data['id']}/submit/",
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    mock_transition.assert_called_once_with(mock.ANY, TransferStatus.PROCESSING)
 
 
 @pytest.mark.django_db

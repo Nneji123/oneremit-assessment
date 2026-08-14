@@ -2,6 +2,7 @@ import hashlib
 import json
 import uuid
 
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
@@ -66,6 +67,11 @@ class TransferViewSet(
                 {"detail": "Idempotency-Key header is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if len(idempotency_key) > 255:
+            return Response(
+                {"detail": "Idempotency-Key must be 255 characters or fewer."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         serializer = CreateTransferSerializer(data=request.data)
         if not serializer.is_valid():
@@ -117,27 +123,25 @@ class TransferViewSet(
     @action(detail=True, methods=["post"], url_path="submit")
     def submit(self, request, pk=None):
         try:
-            with transaction.atomic():
-                transfer = Transfer.objects.select_for_update().get(pk=pk)
-                if transfer.status != TransferStatus.PENDING:
-                    detail = f"Cannot submit transfer in '{transfer.status}' status."
-                    return Response(
-                        {"detail": detail},
-                        status=status.HTTP_409_CONFLICT,
-                    )
-                provider_id = f"prov_{uuid.uuid4().hex}"
-                transfer.provider_transfer_id = provider_id
-                transfer.status = TransferStatus.PROCESSING
-                transfer.save(
-                    update_fields=["provider_transfer_id", "status", "updated_at"]
-                )
-        except Transfer.DoesNotExist:
+            transfer = Transfer.objects.only("pk").get(pk=pk)
+        except (Transfer.DoesNotExist, ValidationError):
             return Response(
                 {"detail": "Transfer not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        out = TransferSerializer(transfer)
+        try:
+            with transaction.atomic():
+                locked = transition_transfer(transfer, TransferStatus.PROCESSING)
+                locked.provider_transfer_id = f"prov_{uuid.uuid4().hex}"
+                locked.save(update_fields=["provider_transfer_id", "updated_at"])
+        except InvalidTransferTransition as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        out = TransferSerializer(locked)
         return Response(out.data, status=status.HTTP_200_OK)
 
     @extend_schema(
@@ -153,7 +157,7 @@ class TransferViewSet(
         try:
             transfer = Transfer.objects.get(pk=pk)
             locked = transition_transfer(transfer, TransferStatus.CANCELLED)
-        except Transfer.DoesNotExist:
+        except (Transfer.DoesNotExist, ValidationError):
             return Response(
                 {"detail": "Transfer not found."},
                 status=status.HTTP_404_NOT_FOUND,
