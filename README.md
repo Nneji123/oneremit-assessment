@@ -71,7 +71,7 @@ Useful commands:
 docker compose down                 # stop the stack
 docker compose logs -f              # follow logs
 docker compose config --quiet       # validate the compose file
-docker compose run --rm backend pytest
+docker compose --profile test run --rm backend-test
 docker compose exec backend sh      # shell in backend container
 ```
 

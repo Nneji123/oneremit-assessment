@@ -32,9 +32,12 @@ npm run build                            # production build (typecheck + lint ar
 ### Docker
 
 ```bash
-docker compose run --rm backend pytest   # backend tests inside the Compose backend image
-docker compose config --quiet            # validate compose file
+docker compose --profile test run --rm backend-test   # backend tests in the dedicated test image
+docker compose config --quiet                         # validate compose file
 ```
+
+The `backend-test` service builds the `test` Dockerfile target (includes dev
+dependencies) and runs the suite against the Compose PostgreSQL instance.
 
 ### CI (GitHub Actions)
 

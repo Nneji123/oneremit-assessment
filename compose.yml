@@ -18,7 +18,9 @@ services:
       retries: 5
 
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      target: runtime
     ports:
       - "8000:8000"
     environment:
@@ -39,6 +41,25 @@ services:
     command: >
       sh -c "python manage.py migrate --noinput &&
              gunicorn config.wsgi:application --bind 0.0.0.0:8000"
+
+  backend-test:
+    build:
+      context: ./backend
+      target: test
+    profiles: ["test"]
+    environment:
+      ENVIRONMENT: local
+      DEBUG: "1"
+      SECRET_KEY: test-secret
+      PROVIDER_WEBHOOK_SECRET: test-secret
+      POSTGRES_DB: ${POSTGRES_DB:-oneremit}
+      POSTGRES_USER: ${POSTGRES_USER:-oneremit}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-development-only}
+      POSTGRES_HOST: ${POSTGRES_HOST:-db}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+    depends_on:
+      db:
+        condition: service_healthy
 
   frontend:
     build:
