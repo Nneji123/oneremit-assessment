@@ -29,39 +29,54 @@ def _make_transfer(**overrides):
     return Transfer(**fields)
 
 
+def _create_transfer(**overrides):
+    transfer = _make_transfer(**overrides)
+    transfer.save()
+    return transfer
+
+
 @pytest.mark.django_db
 def test_transition_pending_to_processing():
-    transfer = _make_transfer()
+    transfer = _create_transfer()
 
-    transition_transfer(transfer, "processing")
+    result = transition_transfer(transfer, "processing")
 
+    assert result.status == "processing"
+    assert result.pk == transfer.pk
+    transfer.refresh_from_db()
     assert transfer.status == "processing"
 
 
 @pytest.mark.django_db
 def test_transition_pending_to_cancelled():
-    transfer = _make_transfer()
+    transfer = _create_transfer()
 
-    transition_transfer(transfer, "cancelled")
+    result = transition_transfer(transfer, "cancelled")
 
+    assert result.status == "cancelled"
+    transfer.refresh_from_db()
     assert transfer.status == "cancelled"
 
 
 @pytest.mark.django_db
 def test_transition_processing_to_completed():
-    transfer = _make_transfer(status="processing")
+    transfer = _create_transfer(status="processing")
 
-    transition_transfer(transfer, "completed")
+    result = transition_transfer(transfer, "completed")
 
+    assert result.status == "completed"
+    transfer.refresh_from_db()
     assert transfer.status == "completed"
 
 
 @pytest.mark.django_db
 def test_transition_processing_to_failed():
-    transfer = _make_transfer(status="processing")
+    transfer = _create_transfer(status="processing")
 
-    transition_transfer(transfer, "failed")
+    result = transition_transfer(transfer, "failed")
 
+    assert result.status == "failed"
+    transfer.refresh_from_db()
     assert transfer.status == "failed"
 
 
@@ -76,7 +91,7 @@ def test_transition_processing_to_failed():
     ],
 )
 def test_forbidden_transitions_raise_invalid_transition(current, target):
-    transfer = _make_transfer(status=current)
+    transfer = _create_transfer(status=current)
 
     with pytest.raises(InvalidTransferTransition):
         transition_transfer(transfer, target)
@@ -84,7 +99,7 @@ def test_forbidden_transitions_raise_invalid_transition(current, target):
 
 @pytest.mark.django_db
 def test_invalid_transition_error_text_mentions_current_and_requested_statuses():
-    transfer = _make_transfer(status="completed")
+    transfer = _create_transfer(status="completed")
 
     with pytest.raises(InvalidTransferTransition) as excinfo:
         transition_transfer(transfer, "processing")
@@ -205,3 +220,56 @@ def test_idempotency_key_is_unique():
             idempotency_key="dup-key",
             request_fingerprint="fingerprint-b",
         )
+
+
+@pytest.mark.django_db
+def test_transition_rejects_unsaved_transfer():
+    transfer = _make_transfer()
+
+    with pytest.raises(
+        ValueError, match="transition_transfer requires a persisted Transfer"
+    ):
+        transition_transfer(transfer, "processing")
+
+
+@pytest.mark.django_db
+def test_transition_returns_locked_persisted_transfer():
+    transfer = _create_transfer()
+
+    result = transition_transfer(transfer, "processing")
+
+    fresh = Transfer.objects.get(pk=transfer.pk)
+    assert result is not transfer
+    assert result.status == fresh.status == "processing"
+    assert result.pk == transfer.pk
+
+
+@pytest.mark.django_db
+def test_transition_reads_persisted_status_not_stale_memory():
+    transfer = _create_transfer()
+    Transfer.objects.filter(pk=transfer.pk).update(status="processing")
+    assert transfer.status == "pending"
+
+    result = transition_transfer(transfer, "completed")
+    assert result.status == "completed"
+
+
+@pytest.mark.django_db
+def test_stale_concurrent_transition_cannot_apply_invalid_transition():
+    first_caller = _create_transfer()
+    second_caller = Transfer.objects.get(pk=first_caller.pk)
+
+    transition_transfer(first_caller, "processing")
+
+    with pytest.raises(InvalidTransferTransition):
+        transition_transfer(second_caller, "cancelled")
+
+    assert Transfer.objects.get(pk=first_caller.pk).status == "processing"
+
+
+@pytest.mark.django_db
+def test_invalid_status_rejected_at_db_level():
+    transfer = _create_transfer()
+
+    with pytest.raises(IntegrityError):
+        Transfer.objects.filter(pk=transfer.pk).update(status="bogus")

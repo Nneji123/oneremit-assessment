@@ -49,7 +49,11 @@ class Transfer(models.Model):
             models.CheckConstraint(
                 condition=models.Q(amount__gt=0),
                 name="transfers_transfer_amount_gt_zero",
-            )
+            ),
+            models.CheckConstraint(
+                condition=models.Q(status__in=TransferStatus.values),
+                name="transfers_transfer_status_valid",
+            ),
         ]
 
     def save(self, *args, **kwargs):

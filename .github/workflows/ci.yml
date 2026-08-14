@@ -22,14 +22,7 @@ jobs:
       - run: uv sync --locked --dev
       - run: uv run ruff check .
       - run: uv run ruff format --check .
-      # TODO: remove the guard once the backend test suite exists.
-      - name: Run backend tests when implemented
-        run: |
-          if [ -d tests ]; then
-            uv run pytest
-          else
-            echo "Backend tests are not implemented yet; leaving this gate explicit."
-          fi
+      - run: uv run pytest
 
   frontend:
     name: Frontend quality gates
