@@ -1,0 +1,259 @@
+from decimal import Decimal
+
+import pytest
+from rest_framework import status
+from rest_framework.test import APIClient
+
+from transfers.models import Transfer
+
+TRANSFER_URL = "/api/transfers/"
+
+
+@pytest.fixture
+def api_client():
+    return APIClient()
+
+
+def transfer_payload(**overrides):
+    payload = {
+        "amount": "100.00",
+        "currency": "ngn",
+        "recipient_ref": "recipient-123",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def create_transfer(api_client, key="key-123", **payload_overrides):
+    return api_client.post(
+        TRANSFER_URL,
+        transfer_payload(**payload_overrides),
+        format="json",
+        HTTP_IDEMPOTENCY_KEY=key,
+    )
+
+
+@pytest.mark.django_db
+def test_create_transfer_requires_idempotency_key(api_client):
+    response = api_client.post(TRANSFER_URL, transfer_payload(), format="json")
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "detail" in response.data
+
+
+@pytest.mark.django_db
+def test_create_transfer_starts_pending(api_client):
+    response = create_transfer(api_client)
+
+    assert response.status_code == status.HTTP_201_CREATED
+    assert response.data["status"] == "pending"
+    assert response.data["currency"] == "NGN"
+    assert response.data["provider_transfer_id"] is None
+    assert response.data["reference"].startswith("TRF-")
+    assert Transfer.objects.get(pk=response.data["id"]).status == "pending"
+
+
+@pytest.mark.django_db
+def test_replaying_same_key_and_same_body_returns_original_transfer(api_client):
+    first = create_transfer(api_client, key="replay-key")
+    replay = create_transfer(api_client, key="replay-key")
+
+    assert first.status_code == status.HTTP_201_CREATED
+    assert replay.status_code == status.HTTP_200_OK
+    assert replay.data == first.data
+    assert Transfer.objects.count() == 1
+
+
+@pytest.mark.django_db
+def test_reusing_key_with_different_body_returns_409(api_client):
+    first = create_transfer(api_client, key="conflict-key")
+    conflict = create_transfer(
+        api_client,
+        key="conflict-key",
+        amount="101.00",
+    )
+
+    assert first.status_code == status.HTTP_201_CREATED
+    assert conflict.status_code == status.HTTP_409_CONFLICT
+    assert "detail" in conflict.data
+    assert Transfer.objects.count() == 1
+    assert Transfer.objects.get(pk=first.data["id"]).amount == Decimal("100.00")
+
+
+@pytest.mark.django_db
+def test_same_semantic_body_replays_even_if_json_key_order_differs(api_client):
+    first = api_client.post(
+        TRANSFER_URL,
+        {"amount": "100.0", "currency": "ngn", "recipient_ref": "recipient-123"},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="order-key",
+    )
+    replay = api_client.post(
+        TRANSFER_URL,
+        {"recipient_ref": "recipient-123", "currency": "NGN", "amount": "100.00"},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="order-key",
+    )
+
+    assert first.status_code == status.HTTP_201_CREATED
+    assert replay.status_code == status.HTTP_200_OK
+    assert replay.data["id"] == first.data["id"]
+
+
+@pytest.mark.django_db
+def test_create_rejects_non_positive_amount(api_client):
+    response = create_transfer(api_client, amount="0.00")
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "detail" in response.data
+
+
+@pytest.mark.django_db
+def test_create_rejects_amount_with_more_than_two_fractional_places(api_client):
+    response = create_transfer(api_client, amount="10.555")
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "detail" in response.data
+
+
+@pytest.mark.django_db
+def test_create_rejects_unsupported_currency(api_client):
+    response = create_transfer(api_client, currency="CAD")
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "detail" in response.data
+
+
+@pytest.mark.django_db
+def test_submit_moves_pending_transfer_to_processing_and_assigns_provider_id(
+    api_client,
+):
+    created = create_transfer(api_client)
+
+    response = api_client.post(
+        f"{TRANSFER_URL}{created.data['id']}/submit/",
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data["status"] == "processing"
+    assert response.data["provider_transfer_id"].startswith("prov_")
+    transfer = Transfer.objects.get(pk=created.data["id"])
+    assert transfer.status == "processing"
+    assert transfer.provider_transfer_id == response.data["provider_transfer_id"]
+
+
+@pytest.mark.django_db
+def test_submit_rejects_non_pending_transfer(api_client):
+    created = create_transfer(api_client)
+    api_client.post(f"{TRANSFER_URL}{created.data['id']}/submit/", format="json")
+
+    response = api_client.post(
+        f"{TRANSFER_URL}{created.data['id']}/submit/",
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert "detail" in response.data
+
+
+@pytest.mark.django_db
+def test_cancel_moves_pending_transfer_to_cancelled(api_client):
+    created = create_transfer(api_client)
+
+    response = api_client.post(
+        f"{TRANSFER_URL}{created.data['id']}/cancel/",
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data["status"] == "cancelled"
+
+
+@pytest.mark.django_db
+def test_cancel_after_submit_returns_409(api_client):
+    created = create_transfer(api_client)
+    api_client.post(f"{TRANSFER_URL}{created.data['id']}/submit/", format="json")
+
+    response = api_client.post(
+        f"{TRANSFER_URL}{created.data['id']}/cancel/",
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert "detail" in response.data
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("terminal_status", ["completed", "failed", "cancelled"])
+def test_cancel_rejects_terminal_transfer(api_client, terminal_status):
+    transfer = Transfer.objects.create(
+        amount=Decimal("100.00"),
+        currency="NGN",
+        recipient_ref="recipient-123",
+        status=terminal_status,
+        idempotency_key=f"{terminal_status}-key",
+        request_fingerprint=f"{terminal_status}-fingerprint",
+    )
+
+    response = api_client.post(f"{TRANSFER_URL}{transfer.pk}/cancel/", format="json")
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert "detail" in response.data
+
+
+@pytest.mark.django_db
+def test_list_returns_newest_first(api_client):
+    first = create_transfer(api_client, key="first-key", recipient_ref="first")
+    second = create_transfer(api_client, key="second-key", recipient_ref="second")
+
+    response = api_client.get(TRANSFER_URL)
+
+    assert response.status_code == status.HTTP_200_OK
+    assert [item["id"] for item in response.data] == [
+        second.data["id"],
+        first.data["id"],
+    ]
+
+
+@pytest.mark.django_db
+def test_detail_returns_transfer(api_client):
+    created = create_transfer(api_client)
+
+    response = api_client.get(f"{TRANSFER_URL}{created.data['id']}/")
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data == created.data
+
+
+@pytest.mark.django_db
+def test_unknown_transfer_id_returns_404(api_client):
+    response = api_client.get(f"{TRANSFER_URL}00000000-0000-0000-0000-000000000000/")
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("action_name", ["submit", "cancel"])
+def test_unknown_transfer_action_returns_404(api_client, action_name):
+    response = api_client.post(
+        f"{TRANSFER_URL}00000000-0000-0000-0000-000000000000/{action_name}/",
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+
+
+@pytest.mark.django_db
+def test_update_and_delete_are_not_allowed(api_client):
+    created = create_transfer(api_client)
+
+    update = api_client.patch(
+        f"{TRANSFER_URL}{created.data['id']}/",
+        {"recipient_ref": "changed"},
+        format="json",
+    )
+    delete = api_client.delete(f"{TRANSFER_URL}{created.data['id']}/")
+
+    assert update.status_code == status.HTTP_405_METHOD_NOT_ALLOWED
+    assert delete.status_code == status.HTTP_405_METHOD_NOT_ALLOWED
