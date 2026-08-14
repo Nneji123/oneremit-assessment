@@ -4,8 +4,8 @@ from unittest import mock
 import pytest
 from rest_framework import status
 from rest_framework.test import APIClient
+from transfers.exceptions import InvalidTransferTransition
 from transfers.models import Transfer
-from transfers.services import InvalidTransferTransition
 
 TRANSFER_URL = "/api/transfers/"
 

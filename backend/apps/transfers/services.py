@@ -7,36 +7,16 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from transfers.enums import ProviderEventOutcome, TransferStatus
+from transfers.exceptions import (
+    DuplicateProviderEvent,
+    IdempotencyConflict,
+    InvalidTransferTransition,
+    ProviderEventConflict,
+    TransferNotFound,
+    TransferNotSubmitted,
+    UnknownProviderTransfer,
+)
 from transfers.models import ProviderEvent, Transfer
-
-
-class InvalidTransferTransition(Exception):
-    """Raised when a transfer status transition is not allowed."""
-
-
-class TransferNotFound(Exception):
-    """Raised when a transfer cannot be found by primary key."""
-
-
-class IdempotencyConflict(Exception):
-    """Raised when an Idempotency-Key is reused with a different body."""
-
-
-class DuplicateProviderEvent(Exception):
-    """Raised when an event_id is replayed with an identical payload."""
-
-
-class ProviderEventConflict(Exception):
-    """Raised when an event_id is reused with a different payload."""
-
-
-class UnknownProviderTransfer(Exception):
-    """Raised when a webhook targets a provider id we never issued."""
-
-
-class TransferNotSubmitted(Exception):
-    """Raised when a webhook targets a transfer that is still pending."""
-
 
 _ALLOWED_TRANSITIONS = {
     "pending": {"processing", "cancelled"},

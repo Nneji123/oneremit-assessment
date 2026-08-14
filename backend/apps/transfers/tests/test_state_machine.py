@@ -4,8 +4,9 @@ import pytest
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from transfers.enums import TransferStatus
+from transfers.exceptions import InvalidTransferTransition
 from transfers.models import Transfer
-from transfers.services import InvalidTransferTransition, transition_transfer
+from transfers.services import transition_transfer
 
 TRANSFER_STATUSES = (
     TransferStatus.PENDING,
