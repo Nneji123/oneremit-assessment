@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Oneremit Payout Dashboard",
-  description: "Foundation for the Oneremit payout assessment.",
+  description: "Create, track, and manage payouts.",
 };
 
 export default function RootLayout({
@@ -13,7 +14,19 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <header className="site-header">
+          <Link href="/" className="site-header__brand">
+            <span className="site-header__mark" aria-hidden="true">
+              O
+            </span>
+            <span>
+              Oneremit <span className="site-header__sub">/ PayOut</span>
+            </span>
+          </Link>
+        </header>
+        <main className="site-main">{children}</main>
+      </body>
     </html>
   );
 }

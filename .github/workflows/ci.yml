@@ -40,15 +40,8 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
+      - run: npm test -- --run
       - run: npm run build
-      # TODO: remove the guard once the frontend test suite exists.
-      - name: Run frontend tests when implemented
-        run: |
-          if find . -path './node_modules' -prune -o -name '*.test.*' -print -quit | grep -q .; then
-            npm test -- --run
-          else
-            echo "Frontend tests are not implemented yet; leaving this gate explicit."
-          fi
 
   docker:
     name: Docker image builds
