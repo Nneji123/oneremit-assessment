@@ -56,3 +56,15 @@ jobs:
           else
             echo "Frontend tests are not implemented yet; leaving this gate explicit."
           fi
+
+  docker:
+    name: Docker image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose configuration
+        run: docker compose config --quiet
+      - name: Build backend image
+        run: docker compose build backend
+      - name: Build frontend image
+        run: docker compose build frontend

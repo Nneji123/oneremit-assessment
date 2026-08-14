@@ -2,13 +2,17 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: oneremit
-      POSTGRES_USER: oneremit
+      POSTGRES_DB: ${POSTGRES_DB:-oneremit}
+      POSTGRES_USER: ${POSTGRES_USER:-oneremit}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-development-only}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U oneremit"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $${POSTGRES_USER:-oneremit} -d $${POSTGRES_DB:-oneremit}",
+        ]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -18,10 +22,15 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DEBUG: "1"
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DEBUG: ${DEBUG:-1}
       SECRET_KEY: ${SECRET_KEY:-local-development-only}
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
-      DATABASE_URL: postgres://oneremit:${POSTGRES_PASSWORD:-local-development-only}@db:5432/oneremit
+      POSTGRES_DB: ${POSTGRES_DB:-oneremit}
+      POSTGRES_USER: ${POSTGRES_USER:-oneremit}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-development-only}
+      POSTGRES_HOST: ${POSTGRES_HOST:-db}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
       CORS_ALLOWED_ORIGINS: http://localhost:3000
       PROVIDER_WEBHOOK_SECRET: ${PROVIDER_WEBHOOK_SECRET:-local-development-only}
     depends_on:
@@ -32,11 +41,14 @@ services:
              gunicorn config.wsgi:application --bind 0.0.0.0:8000"
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000/api}
     ports:
       - "3000:3000"
     environment:
-      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000/api
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000/api}
 
 volumes:
   postgres_data:
