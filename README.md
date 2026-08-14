@@ -75,8 +75,11 @@ docker compose run --rm backend pytest
 docker compose exec backend sh      # shell in backend container
 ```
 
-Useful Makefile shortcuts (equivalent commands): `make up`, `make down`,
-`make logs`, `make dev`, `make backend-shell`, `make frontend-shell`.
+Useful Makefile shortcuts: `make up`, `make down`, `make logs`,
+`make backend-shell`, `make frontend-shell` wrap the Compose commands above.
+`make dev` instead runs the backend and frontend directly outside Docker and
+does **not** load any environment variables, so set the backend env vars from
+"Backend (direct local dev, SQLite fallback)" first.
 
 ## How to run backend and frontend independently
 

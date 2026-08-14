@@ -88,6 +88,8 @@ status values (`400`).
 - Frontend: `6 passed` with `npm test -- --run`.
 - Compose: `docker compose config --quiet` succeeds.
 
-Docker image builds and full `docker compose up` are covered by CI; unless
-run in the current task they are documented as CI commands, not claimed as
-locally verified.
+Docker image builds and the full Compose runtime were locally verified in the
+final pass (`docker compose config --quiet` plus `docker compose up --build`,
+with the backend serving and the frontend reachable). Frontend tests run on
+the host (`npm test -- --run`) and in CI — they are not executed inside the
+production frontend container.

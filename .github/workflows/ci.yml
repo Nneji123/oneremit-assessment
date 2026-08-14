@@ -8,6 +8,11 @@ jobs:
   backend:
     name: Backend quality gates
     runs-on: ubuntu-latest
+    env:
+      ENVIRONMENT: local
+      DEBUG: "1"
+      SECRET_KEY: test-secret
+      PROVIDER_WEBHOOK_SECRET: test-secret
     defaults:
       run:
         working-directory: backend

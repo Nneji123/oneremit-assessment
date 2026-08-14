@@ -15,7 +15,7 @@ supporting documentation. Everything below is implemented in `main`.
 | Health endpoint | `GET /health/` (`config/urls.py`) | — | README API summary |
 | Dependency manifests + lockfiles | `backend/pyproject.toml` + `uv.lock`; `frontend/package.json` + `package-lock.json` | — | README "What this is" |
 | CI quality gates | `.github/workflows/ci.yml` (backend, frontend, docker jobs) | CI runs lint/format/pytest, lint/typecheck/test/build, compose config + image builds | README "Everything at once"; docs/testing.md |
-| No auth, no Celery, no Redis, no real provider | `REST_FRAMEWORK.UNAUTHENTICATED_USER`/empty auth classes; no worker deps | — | README "Assumptions", "What was deliberately left out" |
+| No auth, no Celery, no Redis, no real provider | empty `authentication_classes`/`permission_classes` on the local API views; no worker deps | — | README "Assumptions", "What was deliberately left out" |
 
 ### Transfer domain
 
