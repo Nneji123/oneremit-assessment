@@ -104,10 +104,20 @@ a:hover {
   -webkit-backdrop-filter: blur(8px);
 }
 
+.site-header__inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  width: min(100%, 1240px);
+  margin: 0 auto;
+}
+
 .site-header__brand {
   display: inline-flex;
   align-items: center;
   gap: 10px;
+  flex-shrink: 0;
   color: var(--color-off-white);
   font-weight: 700;
   letter-spacing: -0.01em;
@@ -116,6 +126,13 @@ a:hover {
 .site-header__brand:hover {
   color: var(--color-off-white);
   text-decoration: none;
+}
+
+.site-header__brand img {
+  display: block;
+  width: 138px;
+  height: 36px;
+  object-fit: contain;
 }
 
 .site-header__mark {
@@ -132,6 +149,62 @@ a:hover {
 .site-header__sub {
   color: var(--color-text-link);
   font-weight: 500;
+}
+
+.site-header__switcher {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--color-off-white);
+}
+
+.site-header__switcher a {
+  padding: 9px 14px;
+  border-radius: 7px;
+  color: var(--color-primary-500);
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.site-header__switcher a:hover {
+  background: var(--color-light-teal);
+  text-decoration: none;
+}
+
+.site-header__switcher .site-header__switcher-active {
+  background: var(--color-primary-500);
+  color: var(--color-off-white);
+}
+
+.site-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.site-header__actions a {
+  padding: 11px 16px;
+  border-radius: var(--radius-control);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.site-header__actions a:hover {
+  text-decoration: none;
+}
+
+.site-header__signup {
+  background: var(--color-off-white);
+  color: var(--color-primary-500);
+}
+
+.site-header__login {
+  border: 1px solid var(--color-primary-100);
+  color: var(--color-off-white);
 }
 
 .site-main {
@@ -176,25 +249,327 @@ a:hover {
 
 /* Hero (dark canvas) */
 .hero {
+  position: relative;
+  isolation: isolate;
+  min-height: 390px;
   margin: 0 0 32px;
-  max-width: 760px;
+  padding: clamp(36px, 7vw, 76px) clamp(24px, 6vw, 72px);
+  overflow: hidden;
+  border-radius: var(--radius-card);
+  background: linear-gradient(135deg, #f6f9fc 0%, #d2ffd7 100%);
+  color: var(--color-primary-500);
+  box-shadow: var(--shadow-card);
+}
+
+.hero__texture {
+  z-index: -3;
+  object-fit: cover;
+  opacity: 0.22;
+  mix-blend-mode: multiply;
+}
+
+.hero__wash {
+  position: absolute;
+  z-index: -2;
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(246, 249, 252, 0.98) 0%, rgba(246, 249, 252, 0.86) 46%, rgba(210, 255, 215, 0.38) 100%),
+    radial-gradient(circle at 90% 30%, rgba(146, 255, 157, 0.55), transparent 42%);
+}
+
+.hero__content {
+  position: relative;
+  z-index: 1;
+  max-width: 650px;
+}
+
+.hero__content .eyebrow {
+  background: var(--color-primary-500);
+  color: var(--color-off-white);
+}
+
+.hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 28px;
+}
+
+.hero__trust {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 24px;
+  color: var(--color-text-green);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.hero__trust-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-accent-green-dark);
+  box-shadow: 0 0 0 5px rgba(5, 187, 108, 0.12);
+}
+
+.hero__phone {
+  position: absolute;
+  z-index: 0;
+  right: -12px;
+  bottom: -180px;
+  width: clamp(250px, 34vw, 420px);
+  height: auto;
+  opacity: 0.88;
+  object-fit: contain;
+  object-position: bottom right;
+  filter: drop-shadow(0 24px 36px rgba(4, 48, 40, 0.18));
 }
 
 .hero-title {
-  margin: 16px 0 12px;
-  color: var(--color-off-white);
-  font-size: clamp(2.2rem, 5vw, 3.4rem);
+  position: relative;
+  z-index: 1;
+  margin: 18px 0 12px;
+  color: var(--color-primary-500);
+  font-size: clamp(2.4rem, 5.8vw, 5rem);
   font-weight: 800;
-  line-height: 1.05;
-  letter-spacing: -0.03em;
+  line-height: 0.98;
+  letter-spacing: -0.055em;
 }
 
 .hero-subtitle {
+  position: relative;
+  z-index: 1;
+  max-width: 520px;
   margin: 0;
-  max-width: 560px;
+  color: var(--color-text-green);
+  font-size: clamp(1rem, 2vw, 1.2rem);
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.button--hero-primary {
+  background: var(--color-primary-500);
+  color: var(--color-off-white);
+}
+
+.button--hero-primary:hover {
+  background: #0b4639;
+  text-decoration: none;
+}
+
+.button--hero-secondary {
+  border-color: rgba(4, 48, 40, 0.18);
+  background: rgba(255, 255, 255, 0.48);
+  color: var(--color-primary-500);
+}
+
+.button--hero-secondary:hover {
+  background: rgba(255, 255, 255, 0.78);
+  text-decoration: none;
+}
+
+/* Hero text is intentionally independent from the generic page heading. */
+.hero > .hero-title {
+  max-width: 610px;
+}
+
+/* Keep the dashboard itself visually subordinate to the branded hero. */
+.dashboard-column > h2,
+.list-heading h2 {
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+
+.dashboard-column > h2::before,
+.list-heading h2::before {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin: 0 9px 2px 0;
+  border-radius: 50%;
+  background: var(--color-accent-green-bright);
+  content: "";
+}
+
+.list-panel {
+  position: relative;
+  min-height: 270px;
+  padding: 18px;
+  overflow: hidden;
+  border: 1px solid rgba(236, 246, 244, 0.16);
+  border-radius: var(--radius-card);
+  background: rgba(4, 48, 40, 0.72);
+}
+
+.list-panel__map {
+  z-index: 0;
+  object-fit: cover;
+  object-position: bottom right;
+  opacity: 0.14;
+  filter: brightness(0) invert(1);
+}
+
+.list-panel__content {
+  position: relative;
+  z-index: 1;
+}
+
+.list-panel .list-state {
+  border-color: rgba(236, 246, 244, 0.24);
+  background: rgba(236, 246, 244, 0.08);
   color: var(--color-muted);
-  font-size: 1.1rem;
-  line-height: 1.6;
+}
+
+.list-panel .list-state--error {
+  color: #ffd2cd;
+}
+
+.list-panel .transfer-row {
+  background: rgba(236, 246, 244, 0.94);
+}
+
+.list-panel .transfer-row:hover {
+  background: var(--color-accent-green);
+}
+
+.form-heading {
+  margin-bottom: 24px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--color-primary-100);
+}
+
+.form-kicker {
+  margin: 0 0 8px;
+  color: var(--color-text-link);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.form-heading h3 {
+  margin: 0;
+  color: var(--color-primary-500);
+  font-size: 1.45rem;
+  letter-spacing: -0.03em;
+}
+
+.form-heading p:last-child {
+  margin: 8px 0 0;
+  color: var(--color-text-green);
+  font-size: 0.92rem;
+}
+
+/* Detail illustration layer */
+.detail-card__globe {
+  position: absolute !important;
+  z-index: 0;
+  right: -18%;
+  bottom: -30%;
+  left: auto !important;
+  width: 70% !important;
+  height: 80% !important;
+  object-fit: contain;
+  opacity: 0.08;
+  pointer-events: none;
+}
+
+.detail-header,
+.detail-grid,
+.detail-actions,
+.detail-card > .form-error {
+  position: relative;
+  z-index: 1;
+}
+
+.detail-card > .detail-header {
+  margin-top: 2px;
+}
+
+.detail-card > .detail-header .eyebrow {
+  height: 34px;
+  padding: 0 12px;
+  background: var(--color-light-teal);
+  color: var(--color-primary-500);
+  font-size: 0.78rem;
+}
+
+@media (max-width: 900px) {
+  .site-header__switcher {
+    margin-left: auto;
+  }
+
+  .site-header__actions {
+    display: none;
+  }
+
+  .hero__phone {
+    right: -56px;
+    bottom: -200px;
+    width: 300px;
+    opacity: 0.64;
+  }
+}
+
+@media (max-width: 600px) {
+  .site-header {
+    min-height: 64px;
+  }
+
+  .site-header__inner {
+    gap: 12px;
+  }
+
+  .site-header__brand img {
+    width: 112px;
+    height: 30px;
+  }
+
+  .site-header__brand .site-header__sub {
+    display: none;
+  }
+
+  .site-header__switcher {
+    display: none;
+  }
+
+  .hero {
+    min-height: 470px;
+    padding: 28px 22px;
+  }
+
+  .hero-title {
+    max-width: 300px;
+    font-size: clamp(2.35rem, 12vw, 3.5rem);
+  }
+
+  .hero-subtitle {
+    max-width: 290px;
+    font-size: 0.98rem;
+  }
+
+  .hero__phone {
+    right: -42px;
+    bottom: -205px;
+    width: 270px;
+    opacity: 0.62;
+  }
+
+  .hero__actions {
+    align-items: stretch;
+    flex-direction: column;
+    width: min(100%, 220px);
+  }
+
+  .hero__trust {
+    max-width: 240px;
+    font-size: 0.78rem;
+  }
+
+  .list-panel {
+    padding: 12px;
+  }
 }
 
 /* Eyebrow pill (dashboard hero) */
@@ -218,7 +593,9 @@ a:hover {
 
 /* Cards */
 .card {
+  position: relative;
   padding: clamp(20px, 3vw, 28px);
+  overflow: hidden;
   border-radius: var(--radius-card);
   background: var(--color-off-white);
   color: var(--color-primary-500);

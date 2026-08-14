@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Image from "next/image";
 import { TransferForm } from "../components/transfer-form";
 import { TransferList } from "../components/transfer-list";
 import { createTransfer, listTransfers } from "../lib/api";
@@ -32,18 +33,54 @@ export default function DashboardPage() {
   return (
     <>
       <section className="hero" aria-labelledby="hero-heading">
-        <p className="eyebrow">Oneremit PayOut</p>
-        <h1 id="hero-heading" className="hero-title">
-          Fast, transparent payouts
-        </h1>
-        <p className="hero-subtitle">
-          Create and track payouts to recipients around the world from a single
-          dashboard.
-        </p>
+        <Image
+          className="hero__texture"
+          src="/oneremit-hero-bg.png"
+          alt=""
+          fill
+          priority
+          sizes="(max-width: 960px) 100vw, 1120px"
+        />
+        <div className="hero__wash" aria-hidden="true" />
+        <div className="hero__content">
+          <p className="eyebrow">Oneremit PayOut</p>
+          <h1 id="hero-heading" className="hero-title">
+            Fast payments from Africa to the world.
+          </h1>
+          <p className="hero-subtitle">
+            Create, submit, and track mock payouts with clear state visibility
+            from a single dashboard.
+          </p>
+          <div className="hero__actions">
+            <a className="button button--hero-primary" href="#create-transfer">
+              Create transfer <span aria-hidden="true">→</span>
+            </a>
+            <a className="button button--hero-secondary" href="#transfers">
+              View activity <span aria-hidden="true">→</span>
+            </a>
+          </div>
+          <div className="hero__trust">
+            <span className="hero__trust-dot" aria-hidden="true" />
+            Signed provider events keep every status change traceable
+          </div>
+        </div>
+        <Image
+          className="hero__phone"
+          src="/oneremit-phone-hand.png"
+          alt="Oneremit payment app illustration"
+          width={520}
+          height={740}
+          priority
+          sizes="(max-width: 960px) 260px, 520px"
+        />
       </section>
 
       <div className="dashboard-grid">
-        <section className="dashboard-column" aria-labelledby="create-heading">
+        <section
+          id="create-transfer"
+          className="dashboard-column"
+          aria-labelledby="create-heading"
+        >
           <h2 id="create-heading">Create a transfer</h2>
           <TransferForm
             onCreate={createTransfer}
@@ -57,7 +94,11 @@ export default function DashboardPage() {
           </p>
         </section>
 
-        <section className="dashboard-column" aria-labelledby="list-heading">
+        <section
+          id="transfers"
+          className="dashboard-column"
+          aria-labelledby="list-heading"
+        >
           <div className="list-heading">
             <h2 id="list-heading">Transfers</h2>
             <button
@@ -69,12 +110,23 @@ export default function DashboardPage() {
               Refresh
             </button>
           </div>
-          <TransferList
-            transfers={transfers}
-            loading={loading}
-            error={error}
-            onRetry={() => void loadTransfers()}
-          />
+          <div className="list-panel">
+            <Image
+              className="list-panel__map"
+              src="/oneremit-world-map-dots.png"
+              alt=""
+              fill
+              sizes="(max-width: 960px) 100vw, 700px"
+            />
+            <div className="list-panel__content">
+              <TransferList
+                transfers={transfers}
+                loading={loading}
+                error={error}
+                onRetry={() => void loadTransfers()}
+              />
+            </div>
+          </div>
         </section>
       </div>
     </>

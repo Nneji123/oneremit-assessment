@@ -1,3 +1,4 @@
+import Image from "next/image";
 import type { Transfer } from "../lib/types";
 import { StatusBadge } from "./status-badge";
 import { TransferActions, type TransferAction } from "./transfer-actions";
@@ -18,6 +19,14 @@ export function TransferDetail({
 }) {
   return (
     <article className="card">
+      <Image
+        className="detail-card__globe"
+        src="/oneremit-globe-dots.png"
+        alt=""
+        fill
+        sizes="(max-width: 960px) 100vw, 960px"
+        aria-hidden="true"
+      />
       <div className="detail-header">
         <div>
           <p className="eyebrow">Transfer</p>

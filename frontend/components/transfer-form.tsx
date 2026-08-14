@@ -41,6 +41,11 @@ export function TransferForm({
 
   return (
     <form className="card" onSubmit={handleSubmit}>
+      <div className="form-heading">
+        <p className="form-kicker">New payout</p>
+        <h3>Send money globally</h3>
+        <p>Start a traceable transfer in less than a minute.</p>
+      </div>
       <div className="field">
         <label htmlFor="transfer-amount">Amount</label>
         <input
