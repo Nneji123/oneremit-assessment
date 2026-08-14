@@ -1,4 +1,4 @@
-import type { ApiErrorBody, CreateTransferPayload, Transfer } from "./types";
+import type { ApiEnvelope, CreateTransferPayload, Transfer } from "./types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api";
 
@@ -31,21 +31,19 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     },
   });
 
-  let body: ApiErrorBody | T | null = null;
+  let payload: ApiEnvelope<T> | null = null;
   try {
-    body = (await response.json()) as ApiErrorBody | T;
+    payload = (await response.json()) as ApiEnvelope<T>;
   } catch {
-    body = null;
+    payload = null;
   }
 
-  if (!response.ok) {
-    const detail =
-      (body as ApiErrorBody | null)?.detail ??
-      `Request failed with status ${response.status}.`;
-    throw new ApiError(detail, response.status);
+  if (!response.ok || payload?.success === false) {
+    const message = payload?.message ?? `Request failed (${response.status})`;
+    throw new ApiError(message, response.status);
   }
 
-  return body as T;
+  return payload?.data as T;
 }
 
 export function listTransfers(): Promise<Transfer[]> {

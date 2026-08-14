@@ -111,6 +111,7 @@ CORS_ALLOWED_ORIGINS = os.environ.get(
 REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "UNAUTHENTICATED_USER": None,
+    "DEFAULT_PAGINATION_CLASS": "core.pagination.StandardResultsSetPagination",
 }
 
 SPECTACULAR_SETTINGS = {

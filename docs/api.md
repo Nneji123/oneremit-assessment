@@ -16,7 +16,20 @@ transfer shape:
 | `provider_transfer_id` | string \| null | Provider id assigned on submit. |
 | `created_at` / `updated_at` | string (ISO-8601) | Timestamps. |
 
-Errors share a common shape: `{"detail": "<message>"}`.
+## Response envelope
+
+Every JSON response is wrapped in a consistent envelope:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `success` | boolean | `true` for success responses, `false` for errors. |
+| `message` | string | Human-readable message; empty on success unless noted. |
+| `response_code` | integer | The HTTP status code for the response. |
+| `data` | mixed | The response payload, e.g. a transfer object or an array of transfers for list endpoints. `null` on errors. |
+| `pagination` | object \| null | Present on paginated list responses: `{count, next, previous}`. |
+
+Errors use `success: false` with a `message` describing the problem; there is
+no `{"detail": ...}` key. `data` is `null` for error responses.
 
 ## Create a transfer
 
@@ -56,7 +69,9 @@ Responses:
 
 `GET /api/transfers/`
 
-Returns a JSON array of transfers, newest first.
+Returns a paginated list of transfers, newest first. The results array is in
+the envelope's `data` field, with `pagination` metadata (`count`, `next`,
+`previous`). The page size is 20 by default.
 
 ## Retrieve a transfer
 

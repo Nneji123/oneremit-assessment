@@ -30,6 +30,14 @@ export interface CreateTransferPayload {
   recipient_ref: string;
 }
 
-export interface ApiErrorBody {
-  detail: string;
+export interface ApiEnvelope<T> {
+  success: boolean;
+  message?: string;
+  response_code?: number;
+  data?: T;
+  pagination?: {
+    count: number;
+    next: string | null;
+    previous: string | null;
+  };
 }

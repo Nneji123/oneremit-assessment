@@ -63,6 +63,22 @@ def event_payload(**overrides):
     return payload
 
 
+def assert_envelope_error(response, response_code):
+    assert response.status_code == response_code
+    assert response.data["success"] is False
+    assert response.data["response_code"] == response_code
+    assert isinstance(response.data["message"], str) and response.data["message"]
+    assert response.data["data"] is None
+
+
+def assert_envelope_success(response, message):
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data["success"] is True
+    assert response.data["response_code"] == status.HTTP_200_OK
+    assert response.data["message"] == message
+    assert response.data["data"] is None
+
+
 @pytest.mark.django_db
 def test_missing_provider_signature_returns_401(api_client):
     make_transfer()
@@ -70,6 +86,9 @@ def test_missing_provider_signature_returns_401(api_client):
     response = post_webhook(api_client, event_payload(), sign=False)
 
     assert response.status_code == status.HTTP_401_UNAUTHORIZED
+    assert response.data["success"] is False
+    assert response.data["message"] == "Invalid provider signature."
+    assert response.data["data"] is None
     assert ProviderEvent.objects.count() == 0
 
 
@@ -84,6 +103,9 @@ def test_invalid_provider_signature_returns_401(api_client):
     )
 
     assert response.status_code == status.HTTP_401_UNAUTHORIZED
+    assert response.data["success"] is False
+    assert response.data["message"] == "Invalid provider signature."
+    assert response.data["data"] is None
     assert ProviderEvent.objects.count() == 0
 
 
@@ -94,6 +116,9 @@ def test_malformed_signature_prefix_returns_401(api_client):
     response = post_webhook(api_client, event_payload(), signature="md5=deadbeef")
 
     assert response.status_code == status.HTTP_401_UNAUTHORIZED
+    assert response.data["success"] is False
+    assert response.data["message"] == "Invalid provider signature."
+    assert response.data["data"] is None
     assert ProviderEvent.objects.count() == 0
 
 
@@ -104,6 +129,9 @@ def test_valid_signed_completed_webhook_updates_processing_transfer(api_client):
     response = post_webhook(api_client, event_payload(status="completed"))
 
     assert response.status_code == status.HTTP_200_OK
+    assert response.data["success"] is True
+    assert response.data["message"] == "Provider event recorded."
+    assert response.data["data"] is None
     transfer.refresh_from_db()
     assert transfer.status == "completed"
     event = ProviderEvent.objects.get(event_id="evt_123")
@@ -121,6 +149,9 @@ def test_valid_signed_failed_webhook_updates_processing_transfer(api_client):
     response = post_webhook(api_client, event_payload(status="failed"))
 
     assert response.status_code == status.HTTP_200_OK
+    assert response.data["success"] is True
+    assert response.data["message"] == "Provider event recorded."
+    assert response.data["data"] is None
     transfer.refresh_from_db()
     assert transfer.status == "failed"
     event = ProviderEvent.objects.get(event_id="evt_123")
@@ -139,7 +170,12 @@ def test_scenario_a_duplicate_event_id_is_successful_noop(api_client):
     second = post_webhook(api_client, event_payload(status="completed"))
 
     assert first.status_code == status.HTTP_200_OK
+    assert first.data["success"] is True
+    assert first.data["message"] == "Provider event recorded."
     assert second.status_code == status.HTTP_200_OK
+    assert second.data["success"] is True
+    assert second.data["message"] == "Duplicate event."
+    assert second.data["data"] is None
     assert ProviderEvent.objects.count() == 1
     transfer.refresh_from_db()
     assert transfer.status == "completed"
@@ -160,7 +196,11 @@ def test_scenario_b_completed_then_failed_keeps_completed(api_client):
     )
 
     assert completed.status_code == status.HTTP_200_OK
+    assert completed.data["success"] is True
+    assert completed.data["message"] == "Provider event recorded."
     assert failed.status_code == status.HTTP_200_OK
+    assert failed.data["success"] is True
+    assert failed.data["message"] == "Provider event recorded."
     transfer.refresh_from_db()
     assert transfer.status == "completed"
     assert ProviderEvent.objects.get(event_id="evt_b1").outcome == "applied"
@@ -175,6 +215,9 @@ def test_scenario_c_unknown_provider_transfer_id_returns_404(api_client):
     )
 
     assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert response.data["success"] is False
+    assert response.data["message"] == "Unknown provider transfer id."
+    assert response.data["data"] is None
     assert ProviderEvent.objects.count() == 0
 
 
@@ -185,6 +228,9 @@ def test_scenario_c_pending_transfer_with_provider_id_rejects_409(api_client):
     response = post_webhook(api_client, event_payload())
 
     assert response.status_code == status.HTTP_409_CONFLICT
+    assert response.data["success"] is False
+    assert response.data["message"] == "Transfer has not been submitted."
+    assert response.data["data"] is None
     assert ProviderEvent.objects.count() == 0
     transfer.refresh_from_db()
     assert transfer.status == "pending"
@@ -204,7 +250,11 @@ def test_scenario_d_different_completed_events_same_provider_id_are_noop(api_cli
     )
 
     assert first.status_code == status.HTTP_200_OK
+    assert first.data["success"] is True
+    assert first.data["message"] == "Provider event recorded."
     assert second.status_code == status.HTTP_200_OK
+    assert second.data["success"] is True
+    assert second.data["message"] == "Provider event recorded."
     transfer.refresh_from_db()
     assert transfer.status == "completed"
     assert ProviderEvent.objects.get(event_id="evt_d1").outcome == "applied"
@@ -219,7 +269,14 @@ def test_scenario_e_cancel_after_submit_returns_409(api_client):
     cancelled = api_client.post(f"/api/transfers/{transfer.pk}/cancel/", format="json")
 
     assert submitted.status_code == status.HTTP_200_OK
+    assert submitted.data["success"] is True
+    assert submitted.data["message"] == "Transfer submitted"
     assert cancelled.status_code == status.HTTP_409_CONFLICT
+    assert cancelled.data["success"] is False
+    assert cancelled.data["message"] == (
+        "Cannot transition Transfer from 'processing' to TransferStatus.CANCELLED."
+    )
+    assert cancelled.data["data"] is None
     transfer.refresh_from_db()
     assert transfer.status == "processing"
 
@@ -239,6 +296,9 @@ def test_reusing_event_id_with_different_payload_returns_409(api_client):
 
     assert first.status_code == status.HTTP_200_OK
     assert conflicting.status_code == status.HTTP_409_CONFLICT
+    assert conflicting.data["success"] is False
+    assert conflicting.data["message"] == "Event id conflict: payload differs."
+    assert conflicting.data["data"] is None
     assert ProviderEvent.objects.count() == 1
     transfer.refresh_from_db()
     assert transfer.status == "completed"
@@ -260,6 +320,7 @@ def test_signature_is_computed_from_raw_request_body(api_client):
     )
 
     assert response.status_code == status.HTTP_200_OK
+    assert response.data["success"] is True
 
 
 @pytest.mark.django_db
@@ -274,6 +335,9 @@ def test_malformed_json_returns_400(api_client):
     )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.data["success"] is False
+    assert response.data["message"] == "Malformed JSON body."
+    assert response.data["data"] is None
     assert ProviderEvent.objects.count() == 0
 
 
@@ -287,4 +351,7 @@ def test_invalid_payload_fields_return_400(api_client):
     )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.data["success"] is False
+    assert response.data["message"]
+    assert response.data["data"] is None
     assert ProviderEvent.objects.count() == 0

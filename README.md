@@ -156,7 +156,8 @@ backend` → `docker compose build frontend`.
 ## API endpoint summary
 
 Base URL: `http://localhost:8000/api`. All endpoints accept and return JSON;
-errors use `{"detail": "<message>"}`.
+every response is wrapped in the envelope `{success, message, response_code,
+data[, pagination]}` and errors use `success: false` with a `message`.
 
 | Method | Path | Purpose | Success |
 | --- | --- | --- | --- |
@@ -277,8 +278,9 @@ stops retrying, but the recorded source of truth never regresses.
 A signed event for a transfer id we have never issued is either a provider bug,
 a wrong-secret/attacker replay attempt, or a coding error on our side. Swallowing
 it with a `200` would hide the mismatch and make operational debugging much
-harder. Returning `404` fails loudly, records nothing, and matches the API's
-uniform `{"detail": ...}` error shape. It is distinct from the `409` returned
+harder. Returning `404` fails loudly, records nothing, and matches the API's uniform
+response envelope (errors carry `success: false` with a `message`). It is
+distinct from the `409` returned
 when the transfer *is* known but not yet `processing`.
 
 **Where signature verification belongs in a real Django codebase, and common
@@ -318,7 +320,8 @@ stored — only a SHA-256 fingerprint plus the derived outcome
 - Email/SMS notifications and per-transfer audit display in the UI.
 - Admin UI (`django.contrib.admin` is not installed).
 - Database migrations for non-`transfers` apps; SQLite is only a dev fallback.
-- Pagination on the transfers list (fine at assessment scale).
+- Pagination on the transfers list is on by default (20 per page).
+- Filtering on the transfers list (fine at assessment scale).
 
 ## What would be done differently with more time
 
@@ -328,8 +331,8 @@ stored — only a SHA-256 fingerprint plus the derived outcome
   reconciliation job instead of only recording `ignored_terminal`.
 - Replace frontend polling with server-sent events or WebSockets once a real
   provider/worker exists.
-- Add real auth (sessions or JWT) and per-tenant isolation, plus pagination and
-  filtering on the list endpoint.
+- Add real auth (sessions or JWT) and per-tenant isolation, plus filtering on
+  the list endpoint.
 - Break the single `views.py` into thin HTTP handlers plus a service layer, and
   extract the provider-facing surface into its own app.
 - Add property-based tests for the state machine and load tests for the
