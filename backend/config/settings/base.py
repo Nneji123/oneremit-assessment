@@ -1,9 +1,12 @@
 import os
+import sys
 from pathlib import Path
 
 import dj_database_url
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
+sys.path.insert(0, str(BASE_DIR / "apps"))
 
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "local")
 
@@ -45,6 +48,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "corsheaders",
     "drf_spectacular",
+    "core",
     "transfers",
 ]
 

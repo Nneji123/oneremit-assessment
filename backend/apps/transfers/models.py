@@ -1,33 +1,15 @@
 import uuid
 from decimal import Decimal
 
+from core.models import BaseModel
 from django.core.validators import MinValueValidator
 from django.db import models
-
-
-class TransferStatus(models.TextChoices):
-    PENDING = "pending", "Pending"
-    PROCESSING = "processing", "Processing"
-    COMPLETED = "completed", "Completed"
-    FAILED = "failed", "Failed"
-    CANCELLED = "cancelled", "Cancelled"
-
-
-class TransferCurrency(models.TextChoices):
-    NGN = "NGN", "Nigerian Naira"
-    USD = "USD", "US Dollar"
-    GBP = "GBP", "British Pound"
-    EUR = "EUR", "Euro"
-
-
-class ProviderEventStatus(models.TextChoices):
-    COMPLETED = "completed", "Completed"
-    FAILED = "failed", "Failed"
-
-
-class ProviderEventOutcome(models.TextChoices):
-    APPLIED = "applied", "Applied"
-    IGNORED_TERMINAL = "ignored_terminal", "Ignored terminal"
+from transfers.enums import (
+    ProviderEventOutcome,
+    ProviderEventStatus,
+    TransferCurrency,
+    TransferStatus,
+)
 
 
 class ProviderEvent(models.Model):
@@ -54,8 +36,7 @@ class ProviderEvent(models.Model):
         ordering = ["-received_at"]
 
 
-class Transfer(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+class Transfer(BaseModel):
     reference = models.CharField(max_length=40, unique=True, editable=False)
     amount = models.DecimalField(
         max_digits=20,
@@ -74,8 +55,6 @@ class Transfer(models.Model):
     )
     idempotency_key = models.CharField(max_length=255, unique=True)
     request_fingerprint = models.CharField(max_length=255)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["-created_at"]

@@ -1,8 +1,8 @@
 from decimal import Decimal
 
 from rest_framework import serializers
-
-from transfers.models import ProviderEventStatus, Transfer
+from transfers.enums import ProviderEventStatus
+from transfers.models import Transfer
 
 SUPPORTED_CURRENCIES = {"NGN", "USD", "GBP", "EUR"}
 

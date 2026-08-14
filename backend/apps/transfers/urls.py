@@ -1,6 +1,5 @@
 from django.urls import path
 from rest_framework.routers import SimpleRouter
-
 from transfers.views import ProviderWebhookView, TransferViewSet
 
 router = SimpleRouter()

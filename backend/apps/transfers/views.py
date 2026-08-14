@@ -12,13 +12,8 @@ from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
-
-from transfers.models import (
-    ProviderEvent,
-    ProviderEventOutcome,
-    Transfer,
-    TransferStatus,
-)
+from transfers.enums import ProviderEventOutcome, TransferStatus
+from transfers.models import ProviderEvent, Transfer
 from transfers.serializers import (
     CreateTransferSerializer,
     ProviderWebhookSerializer,

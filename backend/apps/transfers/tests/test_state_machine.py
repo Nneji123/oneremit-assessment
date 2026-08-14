@@ -3,7 +3,6 @@ from decimal import Decimal
 import pytest
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
-
 from transfers.models import Transfer
 from transfers.services import InvalidTransferTransition, transition_transfer
 

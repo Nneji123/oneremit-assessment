@@ -1,5 +1,4 @@
 from django.db import transaction
-
 from transfers.models import Transfer
 
 
