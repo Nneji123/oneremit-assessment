@@ -19,12 +19,14 @@ from transfers.exceptions import (
 from transfers.serializers import (
     CreateTransferSerializer,
     ProviderWebhookSerializer,
+    SimulateProviderEventSerializer,
     TransferSerializer,
 )
 from transfers.services import (
     cancel_transfer,
     create_transfer,
     process_provider_event,
+    simulate_provider_event,
     submit_transfer,
     verify_provider_signature,
 )
@@ -212,6 +214,53 @@ class TransferViewSet(
         return self.get_response(
             data=out.data,
             message="Transfer cancelled",
+            success=True,
+            response_code=status.HTTP_200_OK,
+        )
+
+    @extend_schema(
+        request=SimulateProviderEventSerializer,
+        responses={
+            200: TransferSerializer,
+            400: OpenApiResponse(description="Invalid status."),
+            404: OpenApiResponse(description="Transfer not found."),
+            409: OpenApiResponse(description="Transfer is not processing."),
+        },
+    )
+    @action(detail=True, methods=["post"], url_path="simulate-webhook")
+    def simulate_webhook(self, request, pk=None):
+        serializer = SimulateProviderEventSerializer(data=request.data)
+        if not serializer.is_valid():
+            first_error = next(iter(serializer.errors.values()))
+            detail = first_error[0] if isinstance(first_error, list) else first_error
+            return self.get_response(
+                data=None,
+                message=str(detail),
+                success=False,
+                response_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            locked = simulate_provider_event(pk, serializer.validated_data["status"])
+        except TransferNotFound:
+            return self.get_response(
+                data=None,
+                message="Transfer not found.",
+                success=False,
+                response_code=status.HTTP_404_NOT_FOUND,
+            )
+        except InvalidTransferTransition as exc:
+            return self.get_response(
+                data=None,
+                message=str(exc),
+                success=False,
+                response_code=status.HTTP_409_CONFLICT,
+            )
+
+        out = TransferSerializer(locked)
+        return self.get_response(
+            data=out.data,
+            message="Simulated provider event applied.",
             success=True,
             response_code=status.HTTP_200_OK,
         )

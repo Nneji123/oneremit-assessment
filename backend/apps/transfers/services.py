@@ -17,6 +17,7 @@ from transfers.exceptions import (
     UnknownProviderTransfer,
 )
 from transfers.models import ProviderEvent, Transfer
+from transfers.realtime import broadcast_transfer_status
 
 _ALLOWED_TRANSITIONS = {
     "pending": {"processing", "cancelled"},
@@ -90,11 +91,41 @@ def submit_transfer(pk):
         locked = transition_transfer(transfer, TransferStatus.PROCESSING)
         locked.provider_transfer_id = f"prov_{uuid.uuid4().hex}"
         locked.save(update_fields=["provider_transfer_id", "updated_at"])
+    broadcast_transfer_status(locked.pk)
     return locked
 
 
 def cancel_transfer(pk):
-    return transition_transfer(get_transfer(pk), TransferStatus.CANCELLED)
+    locked = transition_transfer(get_transfer(pk), TransferStatus.CANCELLED)
+    broadcast_transfer_status(locked.pk)
+    return locked
+
+
+def simulate_provider_event(pk, status):
+    """Apply a local, unsigned provider outcome for a processing transfer.
+
+    This is a local demo helper behind the ``simulate-webhook`` API action. It
+    synthesizes an ``event_id`` and funnels the payload through the same
+    :func:`process_provider_event` service the signed production webhook uses,
+    so state machine and event-dedup semantics stay identical. It deliberately
+    refuses anything that is not currently ``processing``.
+    """
+    transfer = get_transfer(pk)
+    if transfer.status != TransferStatus.PROCESSING:
+        raise InvalidTransferTransition(
+            f"Cannot simulate a provider event for transfer in state "
+            f"{transfer.status!r}; only 'processing' transfers can be simulated."
+        )
+    process_provider_event(
+        {
+            "event_id": f"sim_{uuid.uuid4().hex}",
+            "provider_transfer_id": transfer.provider_transfer_id,
+            "status": status,
+            "occurred_at": None,
+        }
+    )
+    transfer.refresh_from_db()
+    return transfer
 
 
 def verify_provider_signature(body, signature):
@@ -153,7 +184,7 @@ def process_provider_event(validated_data):
             else:
                 outcome = ProviderEventOutcome.IGNORED_TERMINAL
 
-            return ProviderEvent.objects.create(
+            event = ProviderEvent.objects.create(
                 transfer=transfer,
                 event_id=event_id,
                 provider_transfer_id=provider_transfer_id,
@@ -168,3 +199,7 @@ def process_provider_event(validated_data):
         if existing.payload_fingerprint == fingerprint:
             raise DuplicateProviderEvent from None
         raise ProviderEventConflict from None
+
+    if event.outcome == ProviderEventOutcome.APPLIED:
+        broadcast_transfer_status(event.transfer_id)
+    return event

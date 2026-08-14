@@ -55,3 +55,16 @@ class ProviderWebhookSerializer(serializers.Serializer):
         choices=ProviderEventStatus.values,
     )
     occurred_at = serializers.DateTimeField(required=False, allow_null=True)
+
+
+class SimulateProviderEventSerializer(serializers.Serializer):
+    """Local demo helper: simulate a provider outcome without a signature.
+
+    This mirrors ``ProviderWebhookSerializer`` minus the idempotency fields so
+    the detail UI can drive a ``processing`` transfer to a terminal state. It is
+    intentionally not a replacement for the signed provider webhook.
+    """
+
+    status = serializers.ChoiceField(
+        choices=ProviderEventStatus.values,
+    )

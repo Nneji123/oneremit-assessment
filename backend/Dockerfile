@@ -41,7 +41,9 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://localhost:8000/health/ || exit 1
 
-CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "120"]
+# uvicorn with one worker so the in-memory channel layer stays in a single
+# process (the local assessment's WebSocket transport).
+CMD ["uvicorn", "config.asgi:application", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
 
 # ---- test: full source + dev dependencies so the suite runs in-container ----
 FROM base AS test

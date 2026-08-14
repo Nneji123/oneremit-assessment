@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "corsheaders",
     "drf_spectacular",
+    "channels",
     "core",
     "transfers",
 ]
@@ -62,6 +63,17 @@ MIDDLEWARE = [
 ROOT_URLCONF = "config.urls"
 
 WSGI_APPLICATION = "config.wsgi.application"
+
+ASGI_APPLICATION = "config.asgi.application"
+
+# Local assessment only: an in-memory channel layer has no cross-process
+# transport, so WebSockets only work within a single process (exactly one
+# uvicorn worker). Production would use a real broker such as Redis.
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels.layers.InMemoryChannelLayer",
+    },
+}
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 

@@ -69,3 +69,34 @@ export function submitTransfer(id: string): Promise<Transfer> {
 export function cancelTransfer(id: string): Promise<Transfer> {
   return request<Transfer>(`/transfers/${id}/cancel/`, { method: "POST" });
 }
+
+export function simulateWebhook(
+  id: string,
+  status: "completed" | "failed",
+): Promise<Transfer> {
+  return request<Transfer>(`/transfers/${id}/simulate-webhook/`, {
+    method: "POST",
+    body: JSON.stringify({ status }),
+  });
+}
+
+export function transferWebSocketUrl(id: string): string {
+  const explicit = process.env.NEXT_PUBLIC_WS_BASE_URL;
+  if (explicit) {
+    return `${explicit}/ws/transfers/${id}/`;
+  }
+  const api = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api";
+  if (/^https?:\/\//.test(api)) {
+    const wsBase = api
+      .replace(/^http/, "ws")
+      .replace(/\/api\/?$/, "");
+    return `${wsBase}/ws/transfers/${id}/`;
+  }
+  const protocol =
+    typeof window !== "undefined" && window.location.protocol === "https:"
+      ? "wss:"
+      : "ws:";
+  const host =
+    typeof window !== "undefined" ? window.location.host : "localhost";
+  return `${protocol}//${host}/ws/transfers/${id}/`;
+}

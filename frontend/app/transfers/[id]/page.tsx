@@ -2,18 +2,24 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ConnectionStatus, type ConnectionStatus as WsStatus } from "../../../components/connection-status";
 import { TransferDetail } from "../../../components/transfer-detail";
 import type { TransferAction } from "../../../components/transfer-actions";
+import type { SimulateStatus } from "../../../components/transfer-simulate";
 import {
   ApiError,
   cancelTransfer,
   getTransfer,
+  simulateWebhook,
   submitTransfer,
+  transferWebSocketUrl,
 } from "../../../lib/api";
 import type { Transfer } from "../../../lib/types";
-
-const POLL_INTERVAL_MS = 2000;
+import {
+  notifyTransferCompleted,
+  requestTransferNotificationPermission,
+} from "../../../lib/notifications";
 
 export default function TransferDetailPage() {
   const params = useParams<{ id: string }>();
@@ -25,11 +31,24 @@ export default function TransferDetailPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState<TransferAction | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [simBusy, setSimBusy] = useState<SimulateStatus | null>(null);
+  const [simError, setSimError] = useState<string | null>(null);
+  const [wsStatus, setWsStatus] = useState<WsStatus>("connecting");
+  const wsStatusRef = useRef<WsStatus>("connecting");
+  const transferRef = useRef<Transfer | null>(null);
+  const loadedRef = useRef(false);
+
+  const updateWsStatus = (status: WsStatus) => {
+    wsStatusRef.current = status;
+    setWsStatus(status);
+  };
 
   const load = useCallback(async () => {
     try {
       const data = await getTransfer(id);
+      transferRef.current = data;
       setTransfer(data);
+      loadedRef.current = true;
       setLoadError(null);
       setNotFound(false);
     } catch (err) {
@@ -50,17 +69,78 @@ export default function TransferDetailPage() {
     void Promise.resolve().then(load);
   }, [load]);
 
-  const status = transfer?.status;
-
   useEffect(() => {
-    if (status !== "processing") {
-      return;
-    }
-    const interval = setInterval(() => {
-      void load();
-    }, POLL_INTERVAL_MS);
-    return () => clearInterval(interval);
-  }, [status, load]);
+    let socket: WebSocket | null = null;
+    let closed = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    let retries = 0;
+    const MAX_RETRIES = 5;
+
+    const connect = () => {
+      if (closed) {
+        return;
+      }
+      updateWsStatus(retries > 0 ? "reconnecting" : "connecting");
+      socket = new WebSocket(transferWebSocketUrl(id));
+
+      socket.onopen = () => {
+        retries = 0;
+        updateWsStatus("connected");
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data as string) as {
+            type?: string;
+            transfer?: Transfer;
+          };
+          if (message.type === "transfer.status" && message.transfer) {
+            const previous = transferRef.current;
+            transferRef.current = message.transfer;
+            setTransfer(message.transfer);
+            setNotFound(false);
+            setLoadError(null);
+            setLoading(false);
+            if (
+              loadedRef.current &&
+              previous?.status !== "completed" &&
+              message.transfer.status === "completed"
+            ) {
+              void notifyTransferCompleted(message.transfer);
+            }
+          }
+        } catch {
+          // Ignore malformed frames.
+        }
+      };
+
+      socket.onclose = () => {
+        if (closed) {
+          return;
+        }
+        retries += 1;
+        if (retries >= MAX_RETRIES) {
+          updateWsStatus("offline");
+        } else {
+          reconnectTimer = setTimeout(connect, 1500 * retries);
+        }
+      };
+
+      socket.onerror = () => {
+        socket?.close();
+      };
+    };
+
+    connect();
+
+    return () => {
+      closed = true;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+      }
+      socket?.close();
+    };
+  }, [id]);
 
   const handleAction = async (action: TransferAction) => {
     setBusy(action);
@@ -77,6 +157,33 @@ export default function TransferDetailPage() {
       );
     } finally {
       setBusy(null);
+    }
+  };
+
+  const handleSimulate = async (status: SimulateStatus) => {
+    setSimBusy(status);
+    setSimError(null);
+    if (status === "completed") {
+      void requestTransferNotificationPermission();
+    }
+    try {
+      const updated = await simulateWebhook(id, status);
+      // The WebSocket broadcast normally drives the UI; the API response is a
+      // graceful fallback when the socket is offline.
+      if (wsStatusRef.current === "offline") {
+        const previous = transferRef.current;
+        transferRef.current = updated;
+        setTransfer(updated);
+        if (previous?.status !== "completed" && updated.status === "completed") {
+          void notifyTransferCompleted(updated);
+        }
+      }
+    } catch (err) {
+      setSimError(
+        err instanceof Error ? err.message : "Simulation failed. Please retry.",
+      );
+    } finally {
+      setSimBusy(null);
     }
   };
 
@@ -117,7 +224,10 @@ export default function TransferDetailPage() {
         transfer={transfer}
         busy={busy}
         actionError={actionError}
+        simBusy={simBusy}
+        simError={simError}
         onAction={(action) => void handleAction(action)}
+        onSimulate={(status) => void handleSimulate(status)}
         onRefresh={() => void load()}
       />
     );
@@ -125,16 +235,13 @@ export default function TransferDetailPage() {
 
   return (
     <div>
-      <Link href="/" className="back-link">
-        ← Back to dashboard
-      </Link>
+      <div className="detail-topbar">
+        <Link href="/" className="back-link">
+          ← Back to dashboard
+        </Link>
+        <ConnectionStatus status={wsStatus} />
+      </div>
       {content}
-      <p className="webhook-note">
-        Provider outcomes (completed / failed) are delivered by a signed
-        webhook. Simulate one from your terminal with <code>curl</code> — see{" "}
-        <code>docs/api.md</code> for the exact payload and signature. The
-        signing secret is never exposed in the browser.
-      </p>
     </div>
   );
 }

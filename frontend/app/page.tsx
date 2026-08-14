@@ -86,12 +86,6 @@ export default function DashboardPage() {
             onCreate={createTransfer}
             onCreated={() => void loadTransfers()}
           />
-          <p className="webhook-note">
-            Provider outcomes (completed / failed) are delivered by a signed
-            webhook. Simulate one from your terminal with <code>curl</code> — see{" "}
-            <code>docs/api.md</code> for the exact payload and signature. The
-            signing secret is never exposed in the browser.
-          </p>
         </section>
 
         <section
