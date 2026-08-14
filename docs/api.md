@@ -108,3 +108,43 @@ processing  -> completed, failed
 ## Unsupported methods
 
 `PATCH`, `PUT`, and `DELETE` on `/api/transfers/` return `405 Method Not Allowed`.
+
+# Provider webhook
+
+`POST /api/webhooks/provider/`
+
+Notifies the backend of a provider-side outcome for a submitted transfer.
+
+Request fields:
+
+| Field | Type | Required | Rules |
+| --- | --- | --- | --- |
+| `event_id` | string | yes | Provider event id; unique per event. |
+| `provider_transfer_id` | string | yes | Id assigned to the transfer on submit. |
+| `status` | string | yes | One of `completed`, `failed`. |
+| `occurred_at` | string (ISO-8601) | no | When the event occurred at the provider. |
+
+The `X-Provider-Signature` header is required and must equal
+`sha256=<HMAC-SHA256 hex>` computed over the exact raw request body using the
+`PROVIDER_WEBHOOK_SECRET`. Signatures are verified before the body is parsed or
+any data is written. Raw payloads and signatures are never stored.
+
+Responses:
+
+| Status | Meaning |
+| --- | --- |
+| `200` | Event applied to a `processing` transfer, a duplicate of an already-recorded event, or an event ignored because the transfer is already terminal. |
+| `400` | Malformed JSON or an invalid payload (e.g. a status other than `completed`/`failed`). |
+| `401` | Missing, malformed, or invalid `X-Provider-Signature`. |
+| `404` | No transfer exists with the given `provider_transfer_id`; no event is recorded. |
+| `409` | The transfer is still `pending`, or the `event_id` was already used with a different payload; no event is recorded. |
+
+Semantics:
+
+- A `processing` transfer moves to `completed` or `failed`.
+- A transfer that is already `completed`, `failed`, or `cancelled` stays
+  unchanged; the event is recorded with outcome `ignored_terminal` and `200` is
+  returned to acknowledge it.
+- Replaying the same `event_id` with an identical payload returns `200` and
+  records nothing new.
+- Reusing an `event_id` with a different payload returns `409`.

@@ -1,7 +1,9 @@
 import hashlib
+import hmac
 import json
 import uuid
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from drf_spectacular.types import OpenApiTypes
@@ -9,9 +11,19 @@ from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_sche
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
-from transfers.models import Transfer, TransferStatus
-from transfers.serializers import CreateTransferSerializer, TransferSerializer
+from transfers.models import (
+    ProviderEvent,
+    ProviderEventOutcome,
+    Transfer,
+    TransferStatus,
+)
+from transfers.serializers import (
+    CreateTransferSerializer,
+    ProviderWebhookSerializer,
+    TransferSerializer,
+)
 from transfers.services import InvalidTransferTransition, transition_transfer
 
 
@@ -23,6 +35,30 @@ def _fingerprint(validated_data):
     }
     canonical = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _verify_provider_signature(signature, body):
+    if not signature or not signature.startswith("sha256="):
+        return False
+    expected = signature[len("sha256=") :]
+    secret = settings.PROVIDER_WEBHOOK_SECRET.encode("utf-8")
+    digest = hmac.new(secret, body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, digest)
+
+
+def _provider_payload_fingerprint(validated_data):
+    canonical = {
+        "event_id": validated_data["event_id"],
+        "provider_transfer_id": validated_data["provider_transfer_id"],
+        "status": validated_data["status"],
+        "occurred_at": (
+            validated_data["occurred_at"].isoformat()
+            if validated_data.get("occurred_at")
+            else None
+        ),
+    }
+    serialized = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode()).hexdigest()
 
 
 class TransferViewSet(
@@ -170,3 +206,124 @@ class TransferViewSet(
 
         out = TransferSerializer(locked)
         return Response(out.data, status=status.HTTP_200_OK)
+
+
+class ProviderWebhookView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    @extend_schema(
+        request=ProviderWebhookSerializer,
+        parameters=[
+            OpenApiParameter(
+                name="X-Provider-Signature",
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.HEADER,
+                required=True,
+            )
+        ],
+        responses={
+            200: OpenApiResponse(description="Event applied, duplicate, or ignored."),
+            400: OpenApiResponse(description="Malformed JSON or invalid payload."),
+            401: OpenApiResponse(description="Missing or invalid signature."),
+            404: OpenApiResponse(description="Unknown provider transfer id."),
+            409: OpenApiResponse(description="Conflicting event or illegal state."),
+        },
+    )
+    def post(self, request, *args, **kwargs):
+        signature = request.META.get("HTTP_X_PROVIDER_SIGNATURE", "")
+        if not _verify_provider_signature(signature, request.body):
+            return Response(
+                {"detail": "Invalid provider signature."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        try:
+            payload = json.loads(request.body)
+        except (ValueError, TypeError, UnicodeDecodeError):
+            return Response(
+                {"detail": "Malformed JSON body."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = ProviderWebhookSerializer(data=payload)
+        if not serializer.is_valid():
+            first_error = next(iter(serializer.errors.values()))
+            detail = first_error[0] if isinstance(first_error, list) else first_error
+            return Response(
+                {"detail": str(detail)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        validated = serializer.validated_data
+        event_id = validated["event_id"]
+        provider_transfer_id = validated["provider_transfer_id"]
+        fingerprint = _provider_payload_fingerprint(validated)
+
+        try:
+            with transaction.atomic():
+                existing = (
+                    ProviderEvent.objects.select_for_update()
+                    .filter(event_id=event_id)
+                    .first()
+                )
+                if existing is not None:
+                    if existing.payload_fingerprint == fingerprint:
+                        return Response(
+                            {"detail": "Duplicate event."},
+                            status=status.HTTP_200_OK,
+                        )
+                    return Response(
+                        {"detail": "Event id conflict: payload differs."},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+
+                transfer = (
+                    Transfer.objects.select_for_update()
+                    .filter(provider_transfer_id=provider_transfer_id)
+                    .first()
+                )
+                if transfer is None:
+                    return Response(
+                        {"detail": "Unknown provider transfer id."},
+                        status=status.HTTP_404_NOT_FOUND,
+                    )
+                if transfer.status == TransferStatus.PENDING:
+                    return Response(
+                        {"detail": "Transfer has not been submitted."},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+
+                if transfer.status == TransferStatus.PROCESSING:
+                    transition_transfer(transfer, validated["status"])
+                    outcome = ProviderEventOutcome.APPLIED
+                else:
+                    outcome = ProviderEventOutcome.IGNORED_TERMINAL
+
+                ProviderEvent.objects.create(
+                    transfer=transfer,
+                    event_id=event_id,
+                    provider_transfer_id=provider_transfer_id,
+                    provider_status=validated["status"],
+                    occurred_at=validated.get("occurred_at"),
+                    payload_fingerprint=fingerprint,
+                    outcome=outcome,
+                )
+                return Response(
+                    {"detail": "Provider event recorded."},
+                    status=status.HTTP_200_OK,
+                )
+        except IntegrityError:
+            with transaction.atomic():
+                existing = ProviderEvent.objects.select_for_update().get(
+                    event_id=event_id
+                )
+            if existing.payload_fingerprint == fingerprint:
+                return Response(
+                    {"detail": "Duplicate event."},
+                    status=status.HTTP_200_OK,
+                )
+            return Response(
+                {"detail": "Event id conflict: payload differs."},
+                status=status.HTTP_409_CONFLICT,
+            )

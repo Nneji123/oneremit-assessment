@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
-from transfers.models import Transfer
+from transfers.models import ProviderEventStatus, Transfer
 
 SUPPORTED_CURRENCIES = {"NGN", "USD", "GBP", "EUR"}
 
@@ -46,3 +46,12 @@ class CreateTransferSerializer(serializers.Serializer):
         if not value or not value.strip():
             raise serializers.ValidationError("recipient_ref is required.")
         return value
+
+
+class ProviderWebhookSerializer(serializers.Serializer):
+    event_id = serializers.CharField(max_length=255)
+    provider_transfer_id = serializers.CharField(max_length=255)
+    status = serializers.ChoiceField(
+        choices=ProviderEventStatus.values,
+    )
+    occurred_at = serializers.DateTimeField(required=False, allow_null=True)

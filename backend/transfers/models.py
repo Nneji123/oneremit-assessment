@@ -20,6 +20,40 @@ class TransferCurrency(models.TextChoices):
     EUR = "EUR", "Euro"
 
 
+class ProviderEventStatus(models.TextChoices):
+    COMPLETED = "completed", "Completed"
+    FAILED = "failed", "Failed"
+
+
+class ProviderEventOutcome(models.TextChoices):
+    APPLIED = "applied", "Applied"
+    IGNORED_TERMINAL = "ignored_terminal", "Ignored terminal"
+
+
+class ProviderEvent(models.Model):
+    transfer = models.ForeignKey(
+        "Transfer",
+        on_delete=models.CASCADE,
+        related_name="provider_events",
+    )
+    event_id = models.CharField(max_length=255, unique=True)
+    provider_transfer_id = models.CharField(max_length=255, db_index=True)
+    provider_status = models.CharField(
+        max_length=16,
+        choices=ProviderEventStatus.choices,
+    )
+    occurred_at = models.DateTimeField(null=True, blank=True)
+    payload_fingerprint = models.CharField(max_length=255)
+    outcome = models.CharField(
+        max_length=32,
+        choices=ProviderEventOutcome.choices,
+    )
+    received_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-received_at"]
+
+
 class Transfer(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     reference = models.CharField(max_length=40, unique=True, editable=False)
