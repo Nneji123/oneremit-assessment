@@ -4,7 +4,6 @@ from unittest import mock
 import pytest
 from rest_framework import status
 from rest_framework.test import APIClient
-from transfers.enums import TransferStatus
 from transfers.models import Transfer
 from transfers.services import InvalidTransferTransition
 
@@ -288,11 +287,11 @@ def test_malformed_transfer_uuid_action_returns_404(api_client, action_name):
     assert_envelope_error(response, status.HTTP_404_NOT_FOUND)
 
 
-@mock.patch("transfers.views.transition_transfer")
+@mock.patch("transfers.views.submit_transfer")
 @pytest.mark.django_db
-def test_submit_delegates_transition_to_service(mock_transition, api_client):
+def test_submit_delegates_transition_to_service(mock_submit_transfer, api_client):
     created = create_transfer(api_client)
-    mock_transition.side_effect = InvalidTransferTransition(
+    mock_submit_transfer.side_effect = InvalidTransferTransition(
         "Cannot transition from 'pending' to 'processing'."
     )
 
@@ -306,7 +305,7 @@ def test_submit_delegates_transition_to_service(mock_transition, api_client):
     assert response.data["message"] == (
         "Cannot transition from 'pending' to 'processing'."
     )
-    mock_transition.assert_called_once_with(mock.ANY, TransferStatus.PROCESSING)
+    mock_submit_transfer.assert_called_once()
 
 
 @pytest.mark.django_db

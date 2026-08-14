@@ -274,7 +274,7 @@ def test_scenario_e_cancel_after_submit_returns_409(api_client):
     assert cancelled.status_code == status.HTTP_409_CONFLICT
     assert cancelled.data["success"] is False
     assert cancelled.data["message"] == (
-        "Cannot transition Transfer from 'processing' to TransferStatus.CANCELLED."
+        "Cannot transition Transfer from 'processing' to 'cancelled'."
     )
     assert cancelled.data["data"] is None
     transfer.refresh_from_db()

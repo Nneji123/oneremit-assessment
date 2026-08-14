@@ -3,16 +3,23 @@ from decimal import Decimal
 import pytest
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
+from transfers.enums import TransferStatus
 from transfers.models import Transfer
 from transfers.services import InvalidTransferTransition, transition_transfer
 
-TRANSFER_STATUSES = ("pending", "processing", "completed", "failed", "cancelled")
+TRANSFER_STATUSES = (
+    TransferStatus.PENDING,
+    TransferStatus.PROCESSING,
+    TransferStatus.COMPLETED,
+    TransferStatus.FAILED,
+    TransferStatus.CANCELLED,
+)
 
 ALLOWED_TRANSITIONS = {
-    ("pending", "processing"),
-    ("pending", "cancelled"),
-    ("processing", "completed"),
-    ("processing", "failed"),
+    (TransferStatus.PENDING, TransferStatus.PROCESSING),
+    (TransferStatus.PENDING, TransferStatus.CANCELLED),
+    (TransferStatus.PROCESSING, TransferStatus.COMPLETED),
+    (TransferStatus.PROCESSING, TransferStatus.FAILED),
 }
 
 
@@ -101,7 +108,7 @@ def test_invalid_transition_error_text_mentions_current_and_requested_statuses()
     transfer = _create_transfer(status="completed")
 
     with pytest.raises(InvalidTransferTransition) as excinfo:
-        transition_transfer(transfer, "processing")
+        transition_transfer(transfer, TransferStatus.PROCESSING)
 
     assert "completed" in str(excinfo.value)
     assert "processing" in str(excinfo.value)
@@ -261,7 +268,7 @@ def test_stale_concurrent_transition_cannot_apply_invalid_transition():
     transition_transfer(first_caller, "processing")
 
     with pytest.raises(InvalidTransferTransition):
-        transition_transfer(second_caller, "cancelled")
+        transition_transfer(second_caller, TransferStatus.CANCELLED)
 
     assert Transfer.objects.get(pk=first_caller.pk).status == "processing"
 

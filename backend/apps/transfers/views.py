@@ -1,60 +1,31 @@
-import hashlib
-import hmac
 import json
-import uuid
 
 from core.mixins import ResponseMixin
-from django.conf import settings
-from django.core.exceptions import ValidationError
-from django.db import IntegrityError, transaction
 from django.http import Http404
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.views import APIView
-from transfers.enums import ProviderEventOutcome, TransferStatus
-from transfers.models import ProviderEvent, Transfer
 from transfers.serializers import (
     CreateTransferSerializer,
     ProviderWebhookSerializer,
     TransferSerializer,
 )
-from transfers.services import InvalidTransferTransition, transition_transfer
-
-
-def _fingerprint(validated_data):
-    normalized = {
-        "amount": format(validated_data["amount"], ".2f"),
-        "currency": validated_data["currency"],
-        "recipient_ref": validated_data["recipient_ref"],
-    }
-    canonical = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode()).hexdigest()
-
-
-def _verify_provider_signature(signature, body):
-    if not signature or not signature.startswith("sha256="):
-        return False
-    expected = signature[len("sha256=") :]
-    secret = settings.PROVIDER_WEBHOOK_SECRET.encode("utf-8")
-    digest = hmac.new(secret, body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, digest)
-
-
-def _provider_payload_fingerprint(validated_data):
-    canonical = {
-        "event_id": validated_data["event_id"],
-        "provider_transfer_id": validated_data["provider_transfer_id"],
-        "status": validated_data["status"],
-        "occurred_at": (
-            validated_data["occurred_at"].isoformat()
-            if validated_data.get("occurred_at")
-            else None
-        ),
-    }
-    serialized = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(serialized.encode()).hexdigest()
+from transfers.services import (
+    DuplicateProviderEvent,
+    IdempotencyConflict,
+    InvalidTransferTransition,
+    ProviderEventConflict,
+    TransferNotFound,
+    TransferNotSubmitted,
+    UnknownProviderTransfer,
+    cancel_transfer,
+    create_transfer,
+    process_provider_event,
+    submit_transfer,
+    verify_provider_signature,
+)
 
 
 class TransferViewSet(
@@ -64,7 +35,7 @@ class TransferViewSet(
     mixins.RetrieveModelMixin,
     viewsets.GenericViewSet,
 ):
-    queryset = Transfer.objects.all()
+    queryset = TransferSerializer.Meta.model.objects.all()
     serializer_class = TransferSerializer
     authentication_classes = []
     permission_classes = []
@@ -75,6 +46,14 @@ class TransferViewSet(
         if self.action == "create":
             return CreateTransferSerializer
         return TransferSerializer
+
+    def http_method_not_allowed(self, request, *args, **kwargs):
+        return self.get_response(
+            data=None,
+            message="Method not allowed.",
+            success=False,
+            response_code=405,
+        )
 
     @extend_schema(
         request=CreateTransferSerializer,
@@ -121,43 +100,25 @@ class TransferViewSet(
                 response_code=status.HTTP_400_BAD_REQUEST,
             )
 
-        validated = serializer.validated_data
-        fingerprint = _fingerprint(validated)
-
         try:
-            with transaction.atomic():
-                transfer = Transfer.objects.create(
-                    amount=validated["amount"],
-                    currency=validated["currency"],
-                    recipient_ref=validated["recipient_ref"],
-                    idempotency_key=idempotency_key,
-                    request_fingerprint=fingerprint,
-                )
-            out = TransferSerializer(transfer)
-            return self.get_response(
-                data=out.data,
-                message="Transfer created",
-                success=True,
-                response_code=status.HTTP_201_CREATED,
+            transfer, created = create_transfer(
+                serializer.validated_data, idempotency_key
             )
-        except IntegrityError:
-            existing = Transfer.objects.filter(idempotency_key=idempotency_key).first()
-            if existing is None:
-                raise
-            if existing.request_fingerprint == fingerprint:
-                out = TransferSerializer(existing)
-                return self.get_response(
-                    data=out.data,
-                    message="Idempotent replay",
-                    success=True,
-                    response_code=status.HTTP_200_OK,
-                )
+        except IdempotencyConflict as exc:
             return self.get_response(
                 data=None,
-                message="Idempotency-Key conflict: request body differs from original.",
+                message=str(exc),
                 success=False,
                 response_code=status.HTTP_409_CONFLICT,
             )
+
+        out = TransferSerializer(transfer)
+        return self.get_response(
+            data=out.data,
+            message="Transfer created" if created else "Idempotent replay",
+            success=True,
+            response_code=(status.HTTP_201_CREATED if created else status.HTTP_200_OK),
+        )
 
     @extend_schema(
         request=None,
@@ -194,20 +155,14 @@ class TransferViewSet(
     @action(detail=True, methods=["post"], url_path="submit")
     def submit(self, request, pk=None):
         try:
-            transfer = Transfer.objects.only("pk").get(pk=pk)
-        except (Transfer.DoesNotExist, ValidationError):
+            locked = submit_transfer(pk)
+        except TransferNotFound:
             return self.get_response(
                 data=None,
                 message="Transfer not found.",
                 success=False,
                 response_code=status.HTTP_404_NOT_FOUND,
             )
-
-        try:
-            with transaction.atomic():
-                locked = transition_transfer(transfer, TransferStatus.PROCESSING)
-                locked.provider_transfer_id = f"prov_{uuid.uuid4().hex}"
-                locked.save(update_fields=["provider_transfer_id", "updated_at"])
         except InvalidTransferTransition as exc:
             return self.get_response(
                 data=None,
@@ -235,9 +190,8 @@ class TransferViewSet(
     @action(detail=True, methods=["post"], url_path="cancel")
     def cancel(self, request, pk=None):
         try:
-            transfer = Transfer.objects.get(pk=pk)
-            locked = transition_transfer(transfer, TransferStatus.CANCELLED)
-        except (Transfer.DoesNotExist, ValidationError):
+            locked = cancel_transfer(pk)
+        except TransferNotFound:
             return self.get_response(
                 data=None,
                 message="Transfer not found.",
@@ -285,7 +239,7 @@ class ProviderWebhookView(ResponseMixin, APIView):
     )
     def post(self, request, *args, **kwargs):
         signature = request.META.get("HTTP_X_PROVIDER_SIGNATURE", "")
-        if not _verify_provider_signature(signature, request.body):
+        if not verify_provider_signature(request.body, signature):
             return self.get_response(
                 data=None,
                 message="Invalid provider signature.",
@@ -314,89 +268,47 @@ class ProviderWebhookView(ResponseMixin, APIView):
                 response_code=status.HTTP_400_BAD_REQUEST,
             )
 
-        validated = serializer.validated_data
-        event_id = validated["event_id"]
-        provider_transfer_id = validated["provider_transfer_id"]
-        fingerprint = _provider_payload_fingerprint(validated)
-
         try:
-            with transaction.atomic():
-                existing = (
-                    ProviderEvent.objects.select_for_update()
-                    .filter(event_id=event_id)
-                    .first()
-                )
-                if existing is not None:
-                    if existing.payload_fingerprint == fingerprint:
-                        return self.get_response(
-                            data=None,
-                            message="Duplicate event.",
-                            success=True,
-                            response_code=status.HTTP_200_OK,
-                        )
-                    return self.get_response(
-                        data=None,
-                        message="Event id conflict: payload differs.",
-                        success=False,
-                        response_code=status.HTTP_409_CONFLICT,
-                    )
-
-                transfer = (
-                    Transfer.objects.select_for_update()
-                    .filter(provider_transfer_id=provider_transfer_id)
-                    .first()
-                )
-                if transfer is None:
-                    return self.get_response(
-                        data=None,
-                        message="Unknown provider transfer id.",
-                        success=False,
-                        response_code=status.HTTP_404_NOT_FOUND,
-                    )
-                if transfer.status == TransferStatus.PENDING:
-                    return self.get_response(
-                        data=None,
-                        message="Transfer has not been submitted.",
-                        success=False,
-                        response_code=status.HTTP_409_CONFLICT,
-                    )
-
-                if transfer.status == TransferStatus.PROCESSING:
-                    transition_transfer(transfer, validated["status"])
-                    outcome = ProviderEventOutcome.APPLIED
-                else:
-                    outcome = ProviderEventOutcome.IGNORED_TERMINAL
-
-                ProviderEvent.objects.create(
-                    transfer=transfer,
-                    event_id=event_id,
-                    provider_transfer_id=provider_transfer_id,
-                    provider_status=validated["status"],
-                    occurred_at=validated.get("occurred_at"),
-                    payload_fingerprint=fingerprint,
-                    outcome=outcome,
-                )
-                return self.get_response(
-                    data=None,
-                    message="Provider event recorded.",
-                    success=True,
-                    response_code=status.HTTP_200_OK,
-                )
-        except IntegrityError:
-            with transaction.atomic():
-                existing = ProviderEvent.objects.select_for_update().get(
-                    event_id=event_id
-                )
-            if existing.payload_fingerprint == fingerprint:
-                return self.get_response(
-                    data=None,
-                    message="Duplicate event.",
-                    success=True,
-                    response_code=status.HTTP_200_OK,
-                )
+            process_provider_event(serializer.validated_data)
+        except DuplicateProviderEvent:
+            return self.get_response(
+                data=None,
+                message="Duplicate event.",
+                success=True,
+                response_code=status.HTTP_200_OK,
+            )
+        except ProviderEventConflict:
             return self.get_response(
                 data=None,
                 message="Event id conflict: payload differs.",
                 success=False,
                 response_code=status.HTTP_409_CONFLICT,
             )
+        except UnknownProviderTransfer:
+            return self.get_response(
+                data=None,
+                message="Unknown provider transfer id.",
+                success=False,
+                response_code=status.HTTP_404_NOT_FOUND,
+            )
+        except TransferNotSubmitted:
+            return self.get_response(
+                data=None,
+                message="Transfer has not been submitted.",
+                success=False,
+                response_code=status.HTTP_409_CONFLICT,
+            )
+        except InvalidTransferTransition as exc:
+            return self.get_response(
+                data=None,
+                message=str(exc),
+                success=False,
+                response_code=status.HTTP_409_CONFLICT,
+            )
+
+        return self.get_response(
+            data=None,
+            message="Provider event recorded.",
+            success=True,
+            response_code=status.HTTP_200_OK,
+        )
