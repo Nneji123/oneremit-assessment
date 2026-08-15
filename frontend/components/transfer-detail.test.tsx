@@ -42,7 +42,9 @@ function renderReceipt(transfer: Transfer) {
 
 function timelineSteps() {
   const timeline = screen.getByRole("list", { name: "Transfer progress" });
-  return Array.from(timeline.children);
+  return Array.from(timeline.children).filter((child) =>
+    child.className.split(" ").includes("receipt-step"),
+  );
 }
 
 describe("TransferDetail receipt", () => {

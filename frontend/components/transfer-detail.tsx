@@ -39,6 +39,28 @@ function stageDescription(status: Transfer["status"], stage: string): string {
   }
 }
 
+function outcomeModifier(status: Transfer["status"]): string {
+  if (status === "failed") return "receipt-step--failed";
+  if (status === "cancelled") return "receipt-step--cancelled";
+  return "";
+}
+
+function stepMark(status: Transfer["status"], stage: string, reached: boolean): string {
+  if (stage !== "Outcome" || !reached) {
+    return "";
+  }
+  switch (status) {
+    case "failed":
+      return "✕";
+    case "cancelled":
+      return "–";
+    case "completed":
+      return "✓";
+    default:
+      return "";
+  }
+}
+
 export function TransferDetail({
   transfer,
   busy,
@@ -97,6 +119,52 @@ export function TransferDetail({
           </span>
         </div>
 
+        <ol className="receipt-timeline" aria-label="Transfer progress">
+          {STAGES.flatMap(([label], index) => {
+            const reached = index <= rank;
+            const isLast = index === STAGES.length - 1;
+            const items = [
+              <li
+                className={`receipt-step ${reached ? "receipt-step--active" : ""} ${
+                  index === rank ? "receipt-step--current" : ""
+                } ${isLast && reached ? outcomeModifier(transfer.status) : ""}`}
+                key={label}
+              >
+                <span className="receipt-step__dot" aria-hidden="true">
+                  {stepMark(transfer.status, label, reached)}
+                </span>
+                <span className="receipt-step__text">
+                  <strong>{label}</strong>
+                  <small>{stageDescription(transfer.status, label)}</small>
+                </span>
+              </li>,
+            ];
+            if (!isLast) {
+              items.push(
+                <li
+                  className={`receipt-step__connector ${
+                    index < rank ? "receipt-step__connector--active" : ""
+                  }`}
+                  key={`${label}-connector`}
+                  aria-hidden="true"
+                >
+                  <svg viewBox="0 0 16 16" width="14" height="14">
+                    <path
+                      d="M4 2l6 6-6 6"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </li>,
+              );
+            }
+            return items;
+          })}
+        </ol>
+
         <dl className="detail-grid">
           <div>
             <dt>Currency</dt>
@@ -115,23 +183,6 @@ export function TransferDetail({
             <dd>{formatDateTime(transfer.updated_at)}</dd>
           </div>
         </dl>
-
-        <ol className="receipt-timeline" aria-label="Transfer progress">
-          {STAGES.map(([label], index) => (
-            <li
-              className={`receipt-step ${
-                index <= rank ? "receipt-step--active" : ""
-              } ${index === rank ? "receipt-step--current" : ""}`}
-              key={label}
-            >
-              <span className="receipt-step__dot" aria-hidden="true" />
-              <span className="receipt-step__text">
-                <strong>{label}</strong>
-                <small>{stageDescription(transfer.status, label)}</small>
-              </span>
-            </li>
-          ))}
-        </ol>
 
         <div className="detail-actions">
           <TransferActions status={transfer.status} busy={busy} onAction={onAction} />

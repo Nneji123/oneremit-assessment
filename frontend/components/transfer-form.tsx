@@ -17,6 +17,12 @@ export function TransferForm({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const handleAmountChange = (value: string) => {
+    const cleaned = value.replace(/[^0-9.]/g, "");
+    const [whole, ...rest] = cleaned.split(".");
+    setAmount(rest.length > 0 ? `${whole}.${rest.join("").slice(0, 2)}` : whole);
+  };
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError(null);
@@ -54,8 +60,9 @@ export function TransferForm({
           type="text"
           inputMode="decimal"
           autoComplete="off"
+          pattern="[0-9]*\.?[0-9]{0,2}"
           value={amount}
-          onChange={(event) => setAmount(event.target.value)}
+          onChange={(event) => handleAmountChange(event.target.value)}
           required
         />
       </div>
