@@ -96,8 +96,7 @@ enums.py → models.py → services.py → serializers.py → views.py → urls.
   (`SELECT ... FOR UPDATE`), re-reads the persisted status, applies exactly one
   allowed transition, and raises `InvalidTransferTransition` otherwise. Views
   are thin HTTP adapters that call into this; they don't re-implement the
-  rules (see the [intentional bug](#intentional-bug) below for what happens
-  when a view does).
+  rules.
 - **`core/`** holds shared, non-domain plumbing: `BaseModel` (UUID pk +
   timestamps), `ResponseMixin` (the `{success, message, response_code, data}`
   envelope every endpoint returns), and a pagination class that keeps that
@@ -241,33 +240,6 @@ layer (see [Known limitations](#7-known-limitations--risks)).
   `ignored_terminal` outcomes, both of which would be useful early warning
   signs of a misbehaving provider integration in production.
 
-## 8. Commit history note
-
-This was built as a sequence of small, incremental commits rather than one
-large dump — see `git log` for the full history (roughly: scaffolding →
-transfer state machine → transfer API + idempotency → signed webhooks →
-frontend dashboard → response envelope/service-layer refactor →
-realtime/simulation → receipt UI polish → docs). `ec23b6d` in particular is
-the commit referenced below in the [intentional bug](#intentional-bug) note.
-
-## Intentional bug
-
-The first version of the `submit` endpoint hand-rolled its own
-`pending → processing` check directly in the view (mirroring, but not
-reusing, the rule already encoded in the shared state-machine service used by
-`cancel`). That's a "silent drift" risk: if the transition rules ever changed
-in `services.py` — say, a new terminal state were added, or the allowed
-transitions were tightened — `submit`'s inline check wouldn't be touched and
-could silently allow an illegal transition or block a legal one, with nothing
-forcing a developer to notice. I added
-`test_submit_delegates_transition_to_service` (in
-`backend/apps/transfers/tests/test_transfers_api.py`), which mocks the shared
-`transition_transfer`/`submit_transfer` call and asserts `submit` actually
-delegates to it (and surfaces its `InvalidTransferTransition` as `409`) rather
-than re-implementing the check — and fixed `submit` to route through the same
-service function as everything else, in commit `ec23b6d` ("fix: harden
-transfer api edge cases").
-
 ## Signed webhook
 
 ```bash
@@ -297,7 +269,7 @@ backend/apps/transfers/         enums, exceptions, models, services, views
 frontend/app/                   dashboard and receipt/detail routes
 frontend/components/            UI, simulation, WebSocket, tests
 frontend/lib/                   REST, WebSocket, and notification helpers
-docs/                           API, architecture, testing, design audit, DoD
+docs/                           API, architecture, testing, DoD
 ```
 
 ## Docs
@@ -308,7 +280,3 @@ docs/                           API, architecture, testing, design audit, DoD
   machine, and realtime flow.
 - [`docs/testing.md`](docs/testing.md) — exact test commands, test matrix, and
   named scenarios A–E.
-- [`docs/assessment-checklist.md`](docs/assessment-checklist.md) — requirement
-  → implementation → test mapping and Definition of Done.
-- [`docs/design-audit.md`](docs/design-audit.md) — audited Oneremit design
-  tokens and responsive rules used by the frontend.

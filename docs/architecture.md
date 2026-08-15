@@ -66,8 +66,8 @@ in real time instead of polling.
   which has no cross-process transport. This is intentional for the local
   assessment; production would swap in a Redis channel layer and scale workers.
 - **Frontend design system** — the dashboard is styled with Albert Sans
-  (`next/font/google`) and Oneremit's design tokens audited from oneremit.co
-  (palette, radii, pills, status colors); see [docs/design-audit.md](design-audit.md).
+  (`next/font/google`) and Oneremit's brand palette, radii, pills, and status
+  colors.
 
 ## Container diagram
 
@@ -155,6 +155,27 @@ otherwise.
 them is allowed. Any other transition attempt returns `409` (or raises
 `InvalidTransferTransition` in the service).
 
+```mermaid
+stateDiagram-v2
+    [*] --> pending: POST /transfers/
+
+    pending --> processing: POST /submit/
+    pending --> cancelled: POST /cancel/
+
+    processing --> completed: webhook/simulate status=completed
+    processing --> failed: webhook/simulate status=failed
+
+    completed --> [*]
+    failed --> [*]
+    cancelled --> [*]
+
+    note right of completed
+        Terminal states are immutable.
+        Any other transition attempt
+        raises InvalidTransferTransition (409).
+    end note
+```
+
 ## Webhook handling rules
 
 For a *signed, valid* event, in order:
@@ -182,6 +203,34 @@ any parsing or writes.
 5. On `IntegrityError`: same key + same fingerprint → replay `200`; same key +
    different fingerprint → `409`.
 
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant V as TransferViewSet.create
+    participant S as services.create_transfer
+    participant DB as PostgreSQL
+
+    C->>V: POST /api/transfers/ (Idempotency-Key, body)
+    V->>V: validate header + body
+    V->>S: create_transfer(data, idempotency_key)
+    S->>DB: INSERT ... idempotency_key UNIQUE
+    alt first delivery
+        DB-->>S: row created
+        S-->>V: transfer (created=True)
+        V-->>C: 201 Created
+    else same key, same body (replay)
+        DB-->>S: IntegrityError
+        S->>DB: SELECT by idempotency_key
+        S-->>V: existing transfer (created=False)
+        V-->>C: 200 OK (original transfer)
+    else same key, different body
+        DB-->>S: IntegrityError
+        S->>S: fingerprint mismatch
+        S-->>V: IdempotencyConflict
+        V-->>C: 409 Conflict
+    end
+```
+
 ### Submit / cancel
 
 1. `POST /api/transfers/{id}/submit/` (or `/cancel/`).
@@ -200,6 +249,45 @@ any parsing or writes.
 4. Inside one `transaction.atomic()`: dedupe `event_id`, look up the transfer by
    `provider_transfer_id`, apply the transition or record `ignored_terminal`,
    and insert the `ProviderEvent`.
+
+```mermaid
+sequenceDiagram
+    participant P as Provider (curl)
+    participant W as ProviderWebhookView
+    participant S as services.process_provider_event
+    participant DB as PostgreSQL
+
+    P->>W: POST /api/webhooks/provider/ (X-Provider-Signature, raw body)
+    W->>W: verify_provider_signature(raw body)
+    alt signature missing/invalid
+        W-->>P: 401 Unauthorized
+    else signature valid
+        W->>W: parse JSON, validate serializer
+        W->>S: process_provider_event(validated_data)
+        S->>DB: SELECT ProviderEvent by event_id
+        alt event_id already seen, same payload
+            S-->>W: duplicate (no-op)
+            W-->>P: 200 OK
+        else event_id already seen, different payload
+            S-->>W: ProviderEventConflict
+            W-->>P: 409 Conflict
+        else no transfer for provider_transfer_id
+            S-->>W: UnknownProviderTransfer
+            W-->>P: 404 Not Found
+        else transfer is pending (never submitted)
+            S-->>W: TransferNotSubmitted
+            W-->>P: 409 Conflict
+        else transfer is processing
+            S->>DB: transition_transfer(completed|failed) + insert ProviderEvent(applied)
+            S-->>W: transfer updated
+            W-->>P: 200 OK
+        else transfer already terminal
+            S->>DB: insert ProviderEvent(ignored_terminal)
+            S-->>W: acknowledged, no state change
+            W-->>P: 200 OK
+        end
+    end
+```
 
 ### Simulate provider event (local demo helper)
 
@@ -225,6 +313,23 @@ any parsing or writes.
    which updates its local `transfer` state immediately.
 4. Broadcasts never run before a transaction commits, so clients never observe
    an uncommitted state.
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant WS as TransferStatusConsumer
+    participant Svc as services (submit/cancel/webhook/simulate)
+    participant CL as Channel layer (in-memory)
+
+    B->>WS: connect ws/transfers/{id}/
+    WS-->>B: initial transfer snapshot
+
+    Note over Svc: status-changing transaction commits
+    Svc->>CL: group_send(transfer_<id>, transfer.status)
+    CL->>WS: transfer.status event
+    WS-->>B: {type: "transfer.status", transfer: {...}}
+    B->>B: update local state, re-render receipt
+```
 
 ### Frontend realtime updates
 
