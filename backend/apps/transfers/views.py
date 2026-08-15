@@ -3,7 +3,13 @@ import json
 from core.mixins import ResponseMixin
 from django.http import Http404
 from drf_spectacular.types import OpenApiTypes
-from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
+from drf_spectacular.utils import (
+    OpenApiExample,
+    OpenApiParameter,
+    OpenApiResponse,
+    extend_schema,
+    extend_schema_view,
+)
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.views import APIView
@@ -31,7 +37,69 @@ from transfers.services import (
     verify_provider_signature,
 )
 
+_TRANSFER_EXAMPLE = {
+    "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "reference": "TRF-9c2f6a1b4e3d4a2f8b6c7d8e9f0a1b2c",
+    "amount": "150.00",
+    "currency": "NGN",
+    "recipient_ref": "Jane Doe - Access Bank 0123456789",
+    "status": "pending",
+    "provider_transfer_id": None,
+    "created_at": "2026-08-15T09:12:00Z",
+    "updated_at": "2026-08-15T09:12:00Z",
+}
 
+
+def _envelope(data=None, message="", success=True, response_code=200, pagination=None):
+    payload = {
+        "success": success,
+        "message": message,
+        "response_code": response_code,
+        "data": data,
+    }
+    if pagination is not None:
+        payload["pagination"] = pagination
+    return payload
+
+
+@extend_schema_view(
+    list=extend_schema(
+        tags=["Transfers"],
+        summary="List transfers",
+        description=(
+            "Returns a paginated list of transfers, most recently created first. "
+            "Use the `page` and `page_size` query parameters to page through results."
+        ),
+        parameters=[
+            OpenApiParameter(
+                name="page",
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description="Page number to fetch (defaults to 1).",
+            ),
+            OpenApiParameter(
+                name="page_size",
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description="Number of transfers per page (defaults to 20).",
+            ),
+        ],
+        examples=[
+            # drf-spectacular auto-nests a single list-response example into
+            # the paginated envelope (data/pagination) declared by
+            # StandardResultsSetPagination.get_paginated_response_schema, so
+            # this value must be one raw transfer item, not the full envelope.
+            OpenApiExample(
+                "Transfer",
+                summary="One transfer as it appears in the paginated list",
+                value=_TRANSFER_EXAMPLE,
+                response_only=True,
+            ),
+        ],
+    ),
+)
 class TransferViewSet(
     ResponseMixin,
     mixins.CreateModelMixin,
@@ -60,6 +128,14 @@ class TransferViewSet(
         )
 
     @extend_schema(
+        tags=["Transfers"],
+        summary="Create a transfer",
+        description=(
+            "Creates a new payout transfer in the `pending` state. Requires a "
+            "client-generated `Idempotency-Key` header — replaying the same key "
+            "with the same body returns the original transfer (200); reusing the "
+            "key with a different body is rejected as a conflict (409)."
+        ),
         request=CreateTransferSerializer,
         parameters=[
             OpenApiParameter(
@@ -67,6 +143,10 @@ class TransferViewSet(
                 type=OpenApiTypes.STR,
                 location=OpenApiParameter.HEADER,
                 required=True,
+                description=(
+                    "Client-generated unique key (e.g. a UUID) that makes retried "
+                    "create requests safe to resend."
+                ),
             )
         ],
         responses={
@@ -75,6 +155,52 @@ class TransferViewSet(
             400: OpenApiResponse(description="Invalid request."),
             409: OpenApiResponse(description="Idempotency conflict."),
         },
+        examples=[
+            OpenApiExample(
+                "Create transfer",
+                summary="Send 150.00 NGN",
+                value={
+                    "amount": "150.00",
+                    "currency": "NGN",
+                    "recipient_ref": "Jane Doe - Access Bank 0123456789",
+                },
+                request_only=True,
+            ),
+            OpenApiExample(
+                "Created",
+                summary="New transfer accepted",
+                value=_envelope(
+                    data=_TRANSFER_EXAMPLE,
+                    message="Transfer created",
+                    response_code=201,
+                ),
+                response_only=True,
+                status_codes=["201"],
+            ),
+            OpenApiExample(
+                "Idempotent replay",
+                summary="Same Idempotency-Key and body resent",
+                value=_envelope(
+                    data=_TRANSFER_EXAMPLE,
+                    message="Idempotent replay",
+                    response_code=200,
+                ),
+                response_only=True,
+                status_codes=["200"],
+            ),
+            OpenApiExample(
+                "Idempotency conflict",
+                summary="Same key reused with a different body",
+                value=_envelope(
+                    data=None,
+                    success=False,
+                    message="Idempotency-Key conflict: request body differs from original.",
+                    response_code=409,
+                ),
+                response_only=True,
+                status_codes=["409"],
+            ),
+        ],
     )
     def create(self, request, *args, **kwargs):
         idempotency_key = request.META.get("HTTP_IDEMPOTENCY_KEY", "").strip()
@@ -125,11 +251,35 @@ class TransferViewSet(
         )
 
     @extend_schema(
+        tags=["Transfers"],
+        summary="Get a transfer",
+        description="Returns a single transfer by its id.",
         request=None,
         responses={
             200: TransferSerializer,
             404: OpenApiResponse(description="Transfer not found."),
         },
+        examples=[
+            OpenApiExample(
+                "Transfer",
+                summary="Existing transfer",
+                value=_envelope(data=_TRANSFER_EXAMPLE),
+                response_only=True,
+                status_codes=["200"],
+            ),
+            OpenApiExample(
+                "Not found",
+                summary="Unknown transfer id",
+                value=_envelope(
+                    data=None,
+                    success=False,
+                    message="Transfer not found.",
+                    response_code=404,
+                ),
+                response_only=True,
+                status_codes=["404"],
+            ),
+        ],
     )
     def retrieve(self, request, *args, **kwargs):
         try:
@@ -149,12 +299,42 @@ class TransferViewSet(
         )
 
     @extend_schema(
+        tags=["Transfers"],
+        summary="Submit a transfer to the provider",
+        description=(
+            "Moves a `pending` transfer to `processing` by submitting it to the "
+            "payout provider. Only valid while the transfer is `pending`."
+        ),
         request=None,
         responses={
             200: TransferSerializer,
             404: OpenApiResponse(description="Transfer not found."),
             409: OpenApiResponse(description="Invalid transfer state."),
         },
+        examples=[
+            OpenApiExample(
+                "Submitted",
+                summary="Transfer moved to processing",
+                value=_envelope(
+                    data={**_TRANSFER_EXAMPLE, "status": "processing"},
+                    message="Transfer submitted",
+                ),
+                response_only=True,
+                status_codes=["200"],
+            ),
+            OpenApiExample(
+                "Invalid state",
+                summary="Transfer is not pending",
+                value=_envelope(
+                    data=None,
+                    success=False,
+                    message="Cannot transition Transfer from 'completed' to 'processing'.",
+                    response_code=409,
+                ),
+                response_only=True,
+                status_codes=["409"],
+            ),
+        ],
     )
     @action(detail=True, methods=["post"], url_path="submit")
     def submit(self, request, pk=None):
@@ -184,12 +364,43 @@ class TransferViewSet(
         )
 
     @extend_schema(
+        tags=["Transfers"],
+        summary="Cancel a transfer",
+        description=(
+            "Cancels a `pending` transfer before it has been submitted to the "
+            "provider. Transfers that are already `processing` or terminal "
+            "cannot be cancelled."
+        ),
         request=None,
         responses={
             200: TransferSerializer,
             404: OpenApiResponse(description="Transfer not found."),
             409: OpenApiResponse(description="Invalid transfer state."),
         },
+        examples=[
+            OpenApiExample(
+                "Cancelled",
+                summary="Transfer cancelled",
+                value=_envelope(
+                    data={**_TRANSFER_EXAMPLE, "status": "cancelled"},
+                    message="Transfer cancelled",
+                ),
+                response_only=True,
+                status_codes=["200"],
+            ),
+            OpenApiExample(
+                "Invalid state",
+                summary="Transfer is already processing",
+                value=_envelope(
+                    data=None,
+                    success=False,
+                    message="Cannot transition Transfer from 'processing' to 'cancelled'.",
+                    response_code=409,
+                ),
+                response_only=True,
+                status_codes=["409"],
+            ),
+        ],
     )
     @action(detail=True, methods=["post"], url_path="cancel")
     def cancel(self, request, pk=None):
@@ -219,6 +430,15 @@ class TransferViewSet(
         )
 
     @extend_schema(
+        tags=["Transfers"],
+        summary="Simulate a provider webhook outcome",
+        description=(
+            "Local demo helper that drives a `processing` transfer straight to a "
+            "terminal `completed` or `failed` state, without a signed provider "
+            "webhook. Intended for exercising the UI/websocket flow in "
+            "development; use the real `/api/webhooks/provider/` endpoint for "
+            "actual provider callbacks."
+        ),
         request=SimulateProviderEventSerializer,
         responses={
             200: TransferSerializer,
@@ -226,6 +446,45 @@ class TransferViewSet(
             404: OpenApiResponse(description="Transfer not found."),
             409: OpenApiResponse(description="Transfer is not processing."),
         },
+        examples=[
+            OpenApiExample(
+                "Simulate success",
+                summary="Mark the transfer as completed",
+                value={"status": "completed"},
+                request_only=True,
+            ),
+            OpenApiExample(
+                "Simulate failure",
+                summary="Mark the transfer as failed",
+                value={"status": "failed"},
+                request_only=True,
+            ),
+            OpenApiExample(
+                "Applied",
+                summary="Transfer moved to a terminal state",
+                value=_envelope(
+                    data={**_TRANSFER_EXAMPLE, "status": "completed"},
+                    message="Simulated provider event applied.",
+                ),
+                response_only=True,
+                status_codes=["200"],
+            ),
+            OpenApiExample(
+                "Not processing",
+                summary="Transfer has not been submitted yet",
+                value=_envelope(
+                    data=None,
+                    success=False,
+                    message=(
+                        "Cannot simulate a provider event for transfer in state "
+                        "'pending'; only 'processing' transfers can be simulated."
+                    ),
+                    response_code=409,
+                ),
+                response_only=True,
+                status_codes=["409"],
+            ),
+        ],
     )
     @action(detail=True, methods=["post"], url_path="simulate-webhook")
     def simulate_webhook(self, request, pk=None):
@@ -271,6 +530,17 @@ class ProviderWebhookView(ResponseMixin, APIView):
     permission_classes = []
 
     @extend_schema(
+        tags=["Webhooks"],
+        summary="Receive a payout provider webhook",
+        description=(
+            "Applies a provider-signed status update to a `processing` transfer, "
+            "moving it to `completed` or `failed`. The request body must be "
+            "signed: compute `hmac_sha256(PROVIDER_WEBHOOK_SECRET, raw_body)` and "
+            "send it hex-encoded as `sha256=<digest>` in the "
+            "`X-Provider-Signature` header. Events are deduplicated by "
+            "`event_id` — replaying the same event id with an identical payload "
+            "returns 200 without reapplying it."
+        ),
         request=ProviderWebhookSerializer,
         parameters=[
             OpenApiParameter(
@@ -278,6 +548,10 @@ class ProviderWebhookView(ResponseMixin, APIView):
                 type=OpenApiTypes.STR,
                 location=OpenApiParameter.HEADER,
                 required=True,
+                description=(
+                    "HMAC-SHA256 signature of the raw request body, formatted as "
+                    "`sha256=<hex digest>`, keyed with PROVIDER_WEBHOOK_SECRET."
+                ),
             )
         ],
         responses={
@@ -287,6 +561,50 @@ class ProviderWebhookView(ResponseMixin, APIView):
             404: OpenApiResponse(description="Unknown provider transfer id."),
             409: OpenApiResponse(description="Conflicting event or illegal state."),
         },
+        examples=[
+            OpenApiExample(
+                "Provider event",
+                summary="Provider reports a completed payout",
+                value={
+                    "event_id": "evt_8f1e6b2c9a3d4e5f6a7b8c9d0e1f2a3b",
+                    "provider_transfer_id": "prov_5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c",
+                    "status": "completed",
+                    "occurred_at": "2026-08-15T09:15:00Z",
+                },
+                request_only=True,
+            ),
+            OpenApiExample(
+                "Event recorded",
+                summary="Event applied",
+                value=_envelope(data=None, message="Provider event recorded."),
+                response_only=True,
+                status_codes=["200"],
+            ),
+            OpenApiExample(
+                "Invalid signature",
+                summary="Signature missing or does not match the body",
+                value=_envelope(
+                    data=None,
+                    success=False,
+                    message="Invalid provider signature.",
+                    response_code=401,
+                ),
+                response_only=True,
+                status_codes=["401"],
+            ),
+            OpenApiExample(
+                "Unknown transfer",
+                summary="provider_transfer_id does not match any transfer",
+                value=_envelope(
+                    data=None,
+                    success=False,
+                    message="Unknown provider transfer id.",
+                    response_code=404,
+                ),
+                response_only=True,
+                status_codes=["404"],
+            ),
+        ],
     )
     def post(self, request, *args, **kwargs):
         signature = request.META.get("HTTP_X_PROVIDER_SIGNATURE", "")

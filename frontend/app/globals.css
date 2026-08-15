@@ -855,6 +855,7 @@ a.button--ghost {
 
 /* Receipt timeline: a single directional flow, Created -> Processing -> Outcome */
 .receipt-timeline {
+  position: relative;
   display: flex;
   align-items: flex-start;
   margin: 0 0 16px;
@@ -941,10 +942,8 @@ a.button--ghost {
 }
 
 .receipt-step__connector {
-  position: relative;
-  display: flex;
-  flex: 0 1 40px;
-  align-items: center;
+  position: absolute;
+  top: 14px;
   height: 20px;
   color: var(--color-primary-300);
 }
@@ -961,9 +960,14 @@ a.button--ghost {
 }
 
 .receipt-step__connector svg {
-  position: relative;
+  position: absolute;
+  top: 50%;
+  left: 50%;
   z-index: 1;
-  margin-left: auto;
+  padding: 3px;
+  border-radius: 50%;
+  background: var(--color-off-white);
+  transform: translate(-50%, -50%);
 }
 
 .receipt-step__connector--active {

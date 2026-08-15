@@ -140,6 +140,7 @@ export function TransferDetail({
               </li>,
             ];
             if (!isLast) {
+              const stepWidth = 100 / STAGES.length;
               items.push(
                 <li
                   className={`receipt-step__connector ${
@@ -147,6 +148,10 @@ export function TransferDetail({
                   }`}
                   key={`${label}-connector`}
                   aria-hidden="true"
+                  style={{
+                    left: `${(index + 0.5) * stepWidth}%`,
+                    width: `${stepWidth}%`,
+                  }}
                 >
                   <svg viewBox="0 0 16 16" width="14" height="14">
                     <path
