@@ -184,7 +184,41 @@ decorator/mixin (read `request.body` once, verify, then hand the verified
 bytes to the view) so every webhook endpoint gets the same treatment instead
 of each one reimplementing HMAC comparison slightly differently.
 
-## 5. What I deliberately left out
+## 5. Intentional bug note
+
+An early draft of `process_provider_event` deduplicated incoming webhooks by
+`provider_transfer_id` instead of `event_id`, on the reasoning that "we only
+care about one transfer's terminal state." That's wrong: it would have made
+scenario D (two different `event_id`s, both `completed`, same
+`provider_transfer_id`) indistinguishable from scenario A (the same
+`event_id` delivered twice) — the second `completed` event for a transfer
+would have been silently treated as *the same event replayed*, rather than
+as a second, distinct event that happens to agree with the first. That
+matters because a provider is allowed to send multiple genuinely different
+events about the same transfer (e.g. a retry with a fresh `event_id` after a
+timeout, not just an exact-byte replay), and collapsing "different event,
+same outcome" into "duplicate of one event" would hide that from the
+`ProviderEvent` audit trail — you'd only ever see one row instead of two,
+and lose the signal that the provider sent redundant-but-distinct
+notifications.
+
+I caught this while writing
+`test_scenario_d_different_completed_events_same_provider_id_are_noop`
+(`backend/apps/transfers/tests/test_provider_webhooks.py`): asserting
+`ProviderEvent.objects.get(event_id="evt_d1").outcome == "applied"` and a
+second row for `evt_d2` only passes if dedup happens on `event_id` first,
+*before* any transfer-level "is this still processing" check — with the
+provider-id-keyed draft, the second event never reached the point where a
+second `ProviderEvent` row would be created, since it looked identical to
+the first at the dedup step. The fix — now in `services.py::process_provider_event`
+— is a strict two-stage check: (1) look up and dedupe by `event_id` under
+`select_for_update()`, and only if that's a genuinely new event id, (2) look
+up the transfer by `provider_transfer_id` and decide `applied` vs.
+`ignored_terminal` based on its current status. Scenario A is entirely
+handled by stage 1; scenarios B and D are both handled by stage 2, and stage
+1 running first is what keeps them from being conflated.
+
+## 6. What I deliberately left out
 
 Per the assessment's out-of-scope list: real KYC, wallets, FX rates, ledgers,
 Celery/Redis background workers, production auth (JWT/OAuth), admin
@@ -194,9 +228,9 @@ and asks to be documented — see [Assumptions](#2-assumptions)); no real
 provider integration (submit always "succeeds" against a fake provider id);
 no background task queue (transitions and webhook processing run
 synchronously inside the request); and no horizontal scaling for the realtime
-layer (see [Known limitations](#7-known-limitations--risks)).
+layer (see [Known limitations](#8-known-limitations--risks)).
 
-## 6. What I would do differently with more time
+## 7. What I would do differently with more time
 
 - **Redis-backed channel layer** so the backend could run more than one ASGI
   worker/replica without losing WebSocket broadcasts, plus a reconnect-and-refetch
@@ -216,7 +250,7 @@ layer (see [Known limitations](#7-known-limitations--risks)).
   out-of-order webhook deliveries** for local load/chaos testing, instead of
   the current one-shot signed-curl example.
 
-## 7. Known limitations / risks
+## 8. Known limitations / risks
 
 - **Single ASGI worker in Docker.** The in-memory Channels layer means the
   `backend` service must run with exactly one `uvicorn` worker (see
